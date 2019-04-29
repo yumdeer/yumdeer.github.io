@@ -1872,7 +1872,7 @@ pre .javascript .function {
   width: 4px;
   height: 4px;
   border-radius: 50%;
-  background: #c80053;
+  background: #f99d5e;
 }
 .feed-link,
 .chat {
@@ -2812,13 +2812,6 @@ hr {
     width: auto;
     text-align: center;
   }
-}
-.post {
-  margin-top: 60px;
-  margin-bottom: 60px;
-  padding: 25px;
-  -webkit-box-shadow: 0 0 14px rgba(202,203,203,0.5);
-  -moz-box-shadow: 0 0 14px rgba(202,203,204,0.5);
 }
 .post-body a {
   color: #428bca;
