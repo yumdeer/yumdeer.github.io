@@ -102,6 +102,32 @@
 
 
 
+<!-- Chatra {literal} -->
+
+  <div style="position: fixed; bottom: 10px; left: -2px; z-index: 9999;">
+    <button id="load-chatra" onclick="chatra.load();">
+        <i class="menu-item-icon fa fa-fw fa-commenting"></i>
+    </button>
+  </div>
+  <script>
+    var chatra = {
+        load : function chatra() {
+          (function(d, w, c) {
+              w.ChatraID = "";
+              var s = d.createElement('script');
+              w[c] = w[c] || function() {
+                  (w[c].q = w[c].q || []).push(arguments);
+              };
+              s.async = true;
+              s.src = 'https://call.chatra.io/chatra.js';
+              if (d.head) d.head.appendChild(s);
+          })(document, window, 'Chatra');
+          $('#load-chatra').remove();
+        }
+    }
+  </script>
+
+<!-- /Chatra {/literal} -->
 
 <script src="//cdn.bootcss.com/pace/1.0.2/pace.min.js"></script>
 <link href="//cdn.bootcss.com/pace/1.0.2/themes/pink/pace-theme-flash.css" rel="stylesheet">
@@ -118,8 +144,6 @@
         border-left-color: #1E92FB;    /*��߿���ɫ*/
     }
 </style>
-
-# chat���칤�� https://www.ezlippi.com/blog/2018/01/next-chat.html
 
   <meta name="description" content="有人说，林深时见鹿，海蓝时见鲸，梦醒时见你。       可实际，林深时雾起，海蓝时潮涌，梦醒时夜续。       未见鹿，未见鲸，未见你。       最后形同陌路的两人，到现在你是否还想起。       虽隔千里，任愿你有好运触手可及。">
 <meta property="og:type" content="website">
