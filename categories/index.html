@@ -102,32 +102,6 @@
 
 
 
-<!-- Chatra {literal} -->
-
-  <div style="position: fixed; bottom: 10px; left: -2px; z-index: 9999;">
-    <button id="load-chatra" onclick="chatra.load();">
-        <i class="menu-item-icon fa fa-fw fa-commenting"></i>
-    </button>
-  </div>
-  <script>
-    var chatra = {
-        load : function chatra() {
-          (function(d, w, c) {
-              w.ChatraID = "";
-              var s = d.createElement('script');
-              w[c] = w[c] || function() {
-                  (w[c].q = w[c].q || []).push(arguments);
-              };
-              s.async = true;
-              s.src = 'https://call.chatra.io/chatra.js';
-              if (d.head) d.head.appendChild(s);
-          })(document, window, 'Chatra');
-          $('#load-chatra').remove();
-        }
-    }
-  </script>
-
-<!-- /Chatra {/literal} -->
 
 <script src="//cdn.bootcss.com/pace/1.0.2/pace.min.js"></script>
 <link href="//cdn.bootcss.com/pace/1.0.2/themes/pink/pace-theme-flash.css" rel="stylesheet">
@@ -568,10 +542,12 @@
           
             <div class="chat motion-element">
               
+                <a onclick="Chatra('openChat', true)">
+              
               
               <i class="fa fa-comment"></i>
                   来一次心灵的碰撞
-                
+                </a>
             </div>
           
 
@@ -873,6 +849,20 @@ show_date_time();
   
 
   
+	
+	<script>
+		(function(d, w, c) {
+			w.ChatraID = 'roX23HinMQTJuphkM# visit Dashboard to get your ChatraID';
+			var s = d.createElement('script');
+			w[c] = w[c] || function() {
+				(w[c].q = w[c].q || []).push(arguments);
+			};
+			s.async = true;
+			s.src = 'https://call.chatra.io/chatra.js';
+			if (d.head) d.head.appendChild(s);
+		})(document, window, 'Chatra');
+	</script>
+
 
   
 
