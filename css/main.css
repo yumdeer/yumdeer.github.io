@@ -1872,7 +1872,7 @@ pre .javascript .function {
   width: 4px;
   height: 4px;
   border-radius: 50%;
-  background: #ff66fa;
+  background: #c80053;
 }
 .feed-link,
 .chat {
@@ -2813,6 +2813,13 @@ hr {
     text-align: center;
   }
 }
+.post {
+  margin-top: 60px;
+  margin-bottom: 60px;
+  padding: 25px;
+  -webkit-box-shadow: 0 0 14px rgba(202,203,203,0.5);
+  -moz-box-shadow: 0 0 14px rgba(202,203,204,0.5);
+}
 .post-body a {
   color: #428bca;
   text-decoration: none;
@@ -2824,4 +2831,10 @@ hr {
 .post-body a: hover {
   color: #f15838;
   border-bottom: 1px dashed #f28a31;
+}
+#days {
+  display: block;
+  color: #07b39b;
+  font-size: 13px;
+  margin-top: 15px;
 }
