@@ -1866,7 +1866,7 @@ pre .javascript .function {
   width: 4px;
   height: 4px;
   border-radius: 50%;
-  background: #f19055;
+  background: #aa71ff;
 }
 .feed-link,
 .chat {
@@ -2819,12 +2819,6 @@ hr {
   color: #f15838;
   border-bottom: 1px dashed #f28a31;
 }
-#days {
-  display: block;
-  color: #07b39b;
-  font-size: 13px;
-  margin-top: 15px;
-}
 ######## �෽�� #########,
 # ǩ��,
 .site-description {
@@ -2835,16 +2829,9 @@ hr {
 }
 #������ʽ,
 .site-author-name {
-  margin: 15px 0 0;
+  margin: 8px 0 0;
   color: #095eff;
   font-family: 'Comic Sans MS', sans-serif;
-}
-# ǩ��,
-.site-description {
-  margin-top: 1px;
-  text-align: center;
-  font-size: 14px;
-  color: #fff;
 }
 # chat�����,
 .chat a {
@@ -2857,4 +2844,18 @@ hr {
   color: #fc2323;
   border: 1px solid #fc237d !important;
   border-radius: 4px;
+}
+# ǩ��,
+.site-description {
+  margin-top: 1px;
+  text-align: center;
+  font-size: 14px;
+  color: #fff;
+}
+#����ʱ��,
+#days {
+  display: block;
+  color: #81ffed;
+  font-size: 10px;
+  margin-top: 15px;
 }
