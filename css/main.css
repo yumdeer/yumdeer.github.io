@@ -1866,7 +1866,7 @@ pre .javascript .function {
   width: 4px;
   height: 4px;
   border-radius: 50%;
-  background: #f0ffff;
+  background: #857fff;
 }
 .feed-link,
 .chat {
@@ -2819,40 +2819,41 @@ hr {
   color: #f15838;
   border-bottom: 1px dashed #f28a31;
 }
-######## �෽�� #########,
-# ǩ��,
-.site-description {
-  margin-top: 1px;
-  text-align: center;
-  font-size: 14px;
-  color: #fff;
-}
-#������ʽ,
 .site-author-name {
   margin: 8px 0 0;
   color: #095eff;
   font-family: 'Comic Sans MS', sans-serif;
 }
-# chat�����,
+.site-description {
+  margin-top: 0px;
+  text-align: center;
+  font-size: 1px;
+  color: #999;
+  font-family: 'Comic Sans MS', sans-serif;
+}
+.feed-link,
+.chat {
+  margin-top: 25px;
+}
+.feed-link a,
 .chat a {
   display: inline-block;
-  padding: 0 10px;
-  padding-top: 0px;
-  padding-right: 10px;
-  padding-bottom: 0px;
-  padding-left: 10px;
-  color: #fc2323;
-  border: 1px solid #fc237d !important;
-  border-radius: 4px;
+  padding: 0 12px;
+  color: #ad00ff;
+  border: 1px solid #ad00ff !important;
+  border-radius: 15px;
 }
-# ǩ��,
+.feed-link a i,
+.chat a i {
+  color: #ad00ff;
+  font-size: 10px;
+}
 .site-description {
   margin-top: 1px;
   text-align: center;
   font-size: 14px;
   color: #fff;
 }
-#����ʱ��,
 #days {
   display: block;
   color: #81ffed;
