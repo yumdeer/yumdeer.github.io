@@ -1866,7 +1866,7 @@ pre .javascript .function {
   width: 4px;
   height: 4px;
   border-radius: 50%;
-  background: #857fff;
+  background: #bed96e;
 }
 .feed-link,
 .chat {
@@ -2822,6 +2822,7 @@ hr {
 .site-author-name {
   margin: 8px 0 0;
   color: #095eff;
+  font-size: 20px;
   font-family: 'Comic Sans MS', sans-serif;
 }
 .site-description {
