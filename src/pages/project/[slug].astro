@@ -1,0 +1,30 @@
+---
+// 项目页 — 幻灯片逐张浏览（键盘 / 点击 / 滑动）。
+import Layout from '../../layouts/Layout.astro';
+import Slideshow from '../../components/Slideshow.astro';
+import { getProjects } from '../../lib/projects';
+
+export async function getStaticPaths() {
+  const projects = await getProjects();
+  return projects.map((p) => ({
+    params: { slug: p.slug },
+    props: { project: p },
+  }));
+}
+
+const { project } = Astro.props;
+---
+
+<Layout
+  title={project.title}
+  description={project.description}
+  activePath={`/project/${project.slug}/`}
+>
+  <div class="project-page">
+    <div class="project-head">
+      <h1>{project.title}{project.year ? ` ${project.year}` : ''}</h1>
+      {project.description && <p class="project-desc">{project.description}</p>}
+    </div>
+    <Slideshow photos={project.photos} title={project.title} />
+  </div>
+</Layout>

@@ -1,9 +1,33 @@
 ---
+// 首页 — 精选作品随机网格（每次构建随机排序），点击进入对应项目幻灯片。
 import Layout from '../layouts/Layout.astro';
-import PhotoGrid from '../components/PhotoGrid.astro';
+import { getProjects, GRID_SIZES } from '../lib/projects';
+
+const projects = await getProjects();
+
+// 汇总所有照片并随机打乱（构建期随机，与参考站一致）
+const all = projects.flatMap((p) =>
+  p.photos.map((photo) => ({ photo, slug: p.slug })),
+);
+for (let i = all.length - 1; i > 0; i--) {
+  const j = Math.floor(Math.random() * (i + 1));
+  [all[i], all[j]] = [all[j], all[i]];
+}
 ---
 
 <Layout>
-  <h1 class="gallery-label">Digital</h1>
-  <PhotoGrid collection="digital" />
+  <section class="selected-grid" aria-label="精选作品">
+    {all.map(({ photo, slug }) => (
+      <a href={`/project/${slug}/`} aria-label={photo.alt}>
+        <img
+          src={photo.src}
+          srcset={photo.srcset}
+          sizes={GRID_SIZES}
+          alt={photo.alt}
+          loading="lazy"
+          decoding="async"
+        />
+      </a>
+    ))}
+  </section>
 </Layout>

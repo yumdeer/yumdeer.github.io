@@ -1,0 +1,92 @@
+---
+// 博客文章页 — 渲染 Markdown/MDX，含 Photo/Gallery 组件的灯箱。
+import Layout from '../../../layouts/Layout.astro';
+import { getCollection, render } from 'astro:content';
+import { getImage } from 'astro:assets';
+import type { ImageMetadata } from 'astro';
+
+export async function getStaticPaths() {
+  const collections = ['photography', 'tech'] as const;
+  const posts = (
+    await Promise.all(
+      collections.map(async (name) => {
+        const entries = await getCollection(name, ({ data }) =>
+          import.meta.env.PROD ? !data.draft : true,
+        );
+        return entries.map((e) => ({ entry: e, collection: name }));
+      }),
+    )
+  ).flat();
+  return posts.map(({ entry, collection }) => ({
+    params: { collection, slug: entry.id },
+    props: { entry, collection },
+  }));
+}
+
+const { entry, collection } = Astro.props;
+const { Content } = await render(entry);
+
+// 封面图（可选）
+let coverSrc: string | undefined;
+if (entry.data.cover) {
+  const img = await getImage({
+    src: entry.data.cover as ImageMetadata,
+    width: 1600,
+    format: 'webp',
+    quality: 80,
+  });
+  coverSrc = img.src;
+}
+
+const fmt = (d: Date) =>
+  `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')}`;
+---
+
+<Layout title={entry.data.title} description={entry.data.description} activePath="/blog/" theme="dark">
+  <article class="article">
+    <header class="article-header">
+      <h1>{entry.data.title}</h1>
+      <p class="article-meta">
+        {fmt(entry.data.pubDate)}　{collection === 'photography' ? '摄影' : '技术'}
+      </p>
+    </header>
+
+    {coverSrc && (
+      <img
+        src={coverSrc}
+        alt={entry.data.coverAlt}
+        style="width:100%;margin-bottom:2em;"
+        loading="eager"
+      />
+    )}
+
+    <div class="prose">
+      <Content />
+    </div>
+  </article>
+
+  <div class="lightbox" id="lightbox">
+    <img src="" alt="" />
+    <p class="lightbox-caption"></p>
+  </div>
+
+  <script>
+    // 文章内图片灯箱（Photo / Gallery 组件通过 data-full 触发）
+    const lb = document.getElementById('lightbox');
+    const lbImg = lb?.querySelector('img');
+    const lbCap = lb?.querySelector('.lightbox-caption');
+    document.querySelectorAll('[data-full]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!lb || !lbImg) return;
+        lbImg.src = (btn as HTMLElement).dataset.full || '';
+        lbImg.alt = (btn as HTMLElement).dataset.alt || '';
+        if (lbCap) lbCap.textContent = (btn as HTMLElement).dataset.caption || '';
+        lb.classList.add('open');
+      });
+    });
+    lb?.addEventListener('click', () => lb.classList.remove('open'));
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') lb?.classList.remove('open');
+    });
+  </script>
+</Layout>

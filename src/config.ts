@@ -15,22 +15,12 @@ export const site = {
   // in a couple of prose pages. Leave it '' to hide it everywhere. See the README
   // for how to self-host a font subset so it renders identically on every device.
   nameZh: '花鹿',
-  title: 'Yumdeer · 花鹿摄影集',
+  title: '花鹿摄影集',
   description:
     '花鹿的摄影集与博客 — 数码与胶片画廊、按月照片日历，以及摄影随笔。',
 };
 
-// Left-hand navigation. "Digital" is the home page and shows by default.
-export const nav: NavItem[] = [
-  { label: 'Digital', href: '/' },
-  { label: 'Analog', href: '/analog' },
-  { label: 'Calendar', href: '/calendar' },
-  { label: 'Tech Blog', href: '/blog/tech' },
-  { label: 'Photo Blog', href: '/blog/photography' },
-  { label: 'About', href: '/about' },
-  { label: 'Contact', href: '/contact' },
-  { label: 'License', href: '/license' },
-];
+// 侧栏导航由 Layout.astro 根据项目数据自动生成（作品 / 随笔 / 关于）。
 
 // Social / external links shown in the sidebar and on the contact page. Replace
 // the placeholders with your own. If you drop or add one, also update the

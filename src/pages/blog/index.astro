@@ -1,0 +1,42 @@
+---
+// 博客列表 — 汇总两个集合（摄影随笔 / 技术），按日期倒序。
+import Layout from '../../layouts/Layout.astro';
+import { getCollection } from 'astro:content';
+
+const collections = [
+  { name: 'photography', label: '摄影' },
+  { name: 'tech', label: '技术' },
+] as const;
+
+const posts = (
+  await Promise.all(
+    collections.map(async (c) => {
+      const entries = await getCollection(c.name, ({ data }) =>
+        import.meta.env.PROD ? !data.draft : true,
+      );
+      return entries.map((e) => ({ ...e, collection: c.name, label: c.label }));
+    }),
+  )
+)
+  .flat()
+  .sort((a, b) => +new Date(b.data.pubDate) - +new Date(a.data.pubDate));
+
+const fmt = (d: Date) =>
+  `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')}`;
+---
+
+<Layout title="随笔" description="摄影随笔与技术文章" activePath="/blog/" theme="dark">
+  <div class="prose-page">
+    <h1>随笔</h1>
+    {posts.length === 0 ? <p>还没有文章。</p> : (
+      <ul class="post-list">
+        {posts.map((post) => (
+          <li>
+            <time>{fmt(post.data.pubDate)}</time>
+            <a href={`/blog/${post.collection}/${post.id}/`}>{post.data.title}</a>
+          </li>
+        ))}
+      </ul>
+    )}
+  </div>
+</Layout>
