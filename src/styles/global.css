@@ -680,3 +680,17 @@ img {
   background: #3a3a44;
   color: #ffffff;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   页面切换渐变过渡（View Transitions）
+   作品(白) ↔ 随笔(黑) 切换时整页交叉淡入淡出，背景经灰阶平滑过渡；
+   同版块内切换则是柔和的淡入。尊重系统「减少动态」偏好。
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@media (prefers-reduced-motion: no-preference) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation-duration: 0.45s;
+    animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  }
+}

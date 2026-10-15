@@ -37,13 +37,23 @@ const { photos, title } = Astro.props;
 </div>
 
 <script>
-  const root = document.querySelector('.slideshow') as HTMLElement | null;
-  if (root) {
+  // 幻灯片交互（ClientRouter 下每次导航后重新绑定；先清理旧键盘监听避免叠加）
+  let slideshowKeys: ((e: KeyboardEvent) => void) | null = null;
+
+  const initSlideshow = () => {
+    if (slideshowKeys) {
+      document.removeEventListener('keydown', slideshowKeys);
+      slideshowKeys = null;
+    }
+    const root = document.querySelector('.slideshow') as HTMLElement | null;
+    if (!root) return;
+
     const imgs = [...root.querySelectorAll('img')] as HTMLImageElement[];
     const captionEl = root.querySelector('[data-caption]') as HTMLElement;
     const counterEl = root.querySelector('[data-counter]') as HTMLElement;
     const zonePrev = root.querySelector('.slide-zone.prev') as HTMLElement;
     const zoneNext = root.querySelector('.slide-zone.next') as HTMLElement;
+    if (!imgs.length) return;
     let current = 0;
 
     const show = (i: number) => {
@@ -56,10 +66,11 @@ const { photos, title } = Astro.props;
     zonePrev.addEventListener('click', () => show(current - 1));
     zoneNext.addEventListener('click', () => show(current + 1));
 
-    document.addEventListener('keydown', (e) => {
+    slideshowKeys = (e: KeyboardEvent) => {
       if (e.key === 'ArrowLeft') show(current - 1);
       if (e.key === 'ArrowRight') show(current + 1);
-    });
+    };
+    document.addEventListener('keydown', slideshowKeys);
 
     // 触摸滑动（移动端）
     let touchX = 0;
@@ -74,5 +85,7 @@ const { photos, title } = Astro.props;
     );
 
     show(0);
-  }
+  };
+
+  document.addEventListener('astro:page-load', initSlideshow);
 </script>

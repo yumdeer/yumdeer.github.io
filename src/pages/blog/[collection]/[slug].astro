@@ -72,21 +72,34 @@ const fmt = (d: Date) =>
 
   <script>
     // 文章内图片灯箱（Photo / Gallery 组件通过 data-full 触发）
-    const lb = document.getElementById('lightbox');
-    const lbImg = lb?.querySelector('img');
-    const lbCap = lb?.querySelector('.lightbox-caption');
-    document.querySelectorAll('[data-full]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        if (!lb || !lbImg) return;
-        lbImg.src = (btn as HTMLElement).dataset.full || '';
-        lbImg.alt = (btn as HTMLElement).dataset.alt || '';
-        if (lbCap) lbCap.textContent = (btn as HTMLElement).dataset.caption || '';
-        lb.classList.add('open');
+    // ClientRouter 下每次导航后重新绑定；先清理旧键盘监听避免叠加
+    let lightboxKeys: ((e: KeyboardEvent) => void) | null = null;
+
+    const initLightbox = () => {
+      if (lightboxKeys) {
+        document.removeEventListener('keydown', lightboxKeys);
+        lightboxKeys = null;
+      }
+      const lb = document.getElementById('lightbox');
+      if (!lb) return;
+      const lbImg = lb.querySelector('img');
+      const lbCap = lb.querySelector('.lightbox-caption');
+      document.querySelectorAll('[data-full]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          if (!lbImg) return;
+          lbImg.src = (btn as HTMLElement).dataset.full || '';
+          lbImg.alt = (btn as HTMLElement).dataset.alt || '';
+          if (lbCap) lbCap.textContent = (btn as HTMLElement).dataset.caption || '';
+          lb.classList.add('open');
+        });
       });
-    });
-    lb?.addEventListener('click', () => lb.classList.remove('open'));
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') lb?.classList.remove('open');
-    });
+      lb.addEventListener('click', () => lb.classList.remove('open'));
+      lightboxKeys = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') lb.classList.remove('open');
+      };
+      document.addEventListener('keydown', lightboxKeys);
+    };
+
+    document.addEventListener('astro:page-load', initLightbox);
   </script>
 </Layout>

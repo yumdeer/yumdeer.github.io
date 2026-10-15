@@ -5,6 +5,7 @@
 // ────────────────────────────────────────────────────────────────────────────
 import { getProjectMetas } from '../lib/projects';
 import { site } from '../config';
+import { ClientRouter } from 'astro:transitions';
 import '../styles/global.css';
 
 interface Props {
@@ -39,6 +40,7 @@ const grouped = categories.map((cat) => ({
     <meta property="og:description" content={description} />
     <meta property="og:type" content="website" />
     <meta property="og:image" content="/og.jpg" />
+    <ClientRouter />
   </head>
   <body class={theme === 'dark' ? 'theme-dark' : ''}>
     <div class="container">
@@ -86,20 +88,24 @@ const grouped = categories.map((cat) => ({
     </div>
 
     <script>
-      // 移动端侧栏抽屉
-      const toggle = document.querySelector('.menu-toggle');
-      const sidebar = document.getElementById('sidebar');
-      toggle?.addEventListener('click', () => {
-        const open = sidebar?.classList.toggle('open');
-        toggle.textContent = open ? '关闭' : '菜单';
-      });
-      // 点击导航链接后自动收起
-      sidebar?.querySelectorAll('a').forEach((a) =>
-        a.addEventListener('click', () => {
-          sidebar.classList.remove('open');
-          if (toggle) toggle.textContent = '菜单';
-        }),
-      );
+      // 移动端侧栏抽屉（ClientRouter 下每次导航后需重新绑定）
+      const initMenu = () => {
+        const toggle = document.querySelector('.menu-toggle') as HTMLElement | null;
+        const sidebar = document.getElementById('sidebar');
+        if (!toggle || !sidebar) return;
+        toggle.addEventListener('click', () => {
+          const open = sidebar.classList.toggle('open');
+          toggle.textContent = open ? '关闭' : '菜单';
+        });
+        // 点击导航链接后自动收起
+        sidebar.querySelectorAll('a').forEach((a) =>
+          a.addEventListener('click', () => {
+            sidebar.classList.remove('open');
+            toggle.textContent = '菜单';
+          }),
+        );
+      };
+      document.addEventListener('astro:page-load', initMenu);
     </script>
   </body>
 </html>
