@@ -3,7 +3,7 @@
 //  全站布局 — 左侧固定边栏（站名 / 项目导航 / 博客 / 关于）+ 右侧内容区。
 //  参照 yundongshu.com 的极简结构。导航数据来自 src/data/projects.ts。
 // ────────────────────────────────────────────────────────────────────────────
-import { projects } from '../data/projects';
+import { getProjectMetas } from '../lib/projects';
 import { site } from '../config';
 import '../styles/global.css';
 
@@ -17,7 +17,8 @@ interface Props {
 const { title, description = site.description, activePath = '', theme = 'light' } = Astro.props;
 const pageTitle = title ? `${title} — ${site.name}` : `${site.name} · ${site.title}`;
 
-// 按分类分组项目（保持 data/projects.ts 中的声明顺序）
+// 按分类分组项目（元数据来自各项目文件夹的 meta.json）
+const projects = getProjectMetas();
 const categories = [...new Set(projects.map((p) => p.category))];
 const grouped = categories.map((cat) => ({
   category: cat,
