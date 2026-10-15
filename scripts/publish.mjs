@@ -37,12 +37,76 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const IMG_EXT = /\.(jpe?g|png|webp|avif)$/i;
 const SITE_URL = 'https://flowerdeer.cn';
 
+// ── 帮助文档 ────────────────────────────────────────────────────────────────
+const HELP = `花鹿摄影集 · 一键发布脚本
+把一个目录里的照片和 Markdown 随笔自动发布到 flowerdeer.cn
+
+用法
+  npm run publish -- <源目录> [选项]        源目录可以是文件夹或单个 .md 文件
+  npm run publish -- --help                 显示本帮助
+
+目录内容自动识别
+  图片 (jpg/jpeg/png/webp/avif)
+      → 复制到 src/assets/projects/<slug>/，首次自动生成 meta.json
+        照片标题取自文件名：01-sunset.jpg → "Sunset"（按文件名排序展示）
+        已存在的同名图片会跳过，不会重复发布
+  Markdown (*.md)
+      → 复制到 src/content/<type>/，自动补全 frontmatter
+        已有 frontmatter 的字段全部保留，仅补缺失的必填项
+        没有标题时取文件名，没有日期时取文件修改时间
+  meta.json (可选)
+      → 本目录的发布配置，适合批量整理时预设参数：
+        { "project": "trip-2026", "title": "2026 旅途", "category": "作品",
+          "year": "2026", "description": "旅途见闻", "type": "photography" }
+
+选项（优先级：CLI 参数 > 源目录 meta.json > 默认值）
+  --project <slug>    项目 slug，即 URL 路径名，建议英文
+                      默认 = 目录名 slug 化（中文目录会自动转为 p-1015 之类）
+  --title <标题>       项目显示标题（侧栏和项目页）    默认 = 目录名
+  --category <分类>    侧栏分组                        默认 = 作品
+  --year <年份>        显示在标题旁                    默认 = 今年
+  --desc <描述>        项目页顶部的一段说明            默认 = 空
+  --type <类型>        随笔集合：photography | tech    默认 = photography
+  --dry-run           只显示发布计划，不实际执行任何修改
+  --no-deploy         只提交源码到 main，不构建部署 gh-pages（之后可 npm run deploy）
+
+执行流程
+  1. 扫描目录，分类图片与随笔
+  2. 复制文件到对应内容目录，登记元数据
+  3. git commit + push（main 分支，只提交本次涉及的路径）
+  4. 构建站点并部署 gh-pages（除非 --no-deploy）
+  5. 打印线上地址（GitHub Pages CDN 生效约需 1-2 分钟）
+
+示例
+  # 发布一个混合目录：照片成为新项目，.md 成为随笔
+  npm run publish -- ~/Pictures/trip
+
+  # 自定义项目信息
+  npm run publish -- ~/Pictures/trip --project trip-2026 --title "2026 旅途" --year 2026
+
+  # 只发一篇技术随笔
+  npm run publish -- ~/notes/k8s-notes.md --type tech
+
+  # 先看看会发生什么，再决定
+  npm run publish -- ~/Pictures/trip --dry-run
+
+相关命令
+  npm run deploy                         手动构建 + 部署（不新增内容）
+  npm run dev                            本地开发预览 http://localhost:4321
+
+小提示
+  • 随笔文件名建议用英文（my-trip.md），URL 更干净；中文可用但 URL 是编码字符
+  • 照片按文件名排序，想控制顺序就加数字前缀：01-xxx.jpg, 02-xxx.jpg
+  • 发布后想改项目标题/分类/描述：直接编辑 src/assets/projects/<slug>/meta.json
+    再跑 npm run deploy 即可，无需重新传图`;
+
 // ── 参数解析 ────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
   const opts = { _: [], deploy: true, dryRun: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--dry-run') opts.dryRun = true;
+    if (a === '--help' || a === '-h') opts.help = true;
+    else if (a === '--dry-run') opts.dryRun = true;
     else if (a === '--no-deploy') opts.deploy = false;
     else if (a === '--project') opts.project = argv[++i];
     else if (a === '--title') opts.title = argv[++i];
@@ -50,16 +114,23 @@ function parseArgs(argv) {
     else if (a === '--year') opts.year = argv[++i];
     else if (a === '--desc') opts.desc = argv[++i];
     else if (a === '--type') opts.type = argv[++i];
-    else if (a.startsWith('--')) { console.error(`未知选项: ${a}`); process.exit(1); }
+    else if (a.startsWith('--')) { console.error(`未知选项: ${a}，用 --help 查看用法`); process.exit(1); }
     else opts._.push(a);
   }
   return opts;
 }
 
 const args = parseArgs(process.argv.slice(2));
+
+if (args.help) {
+  console.log(HELP);
+  process.exit(0);
+}
+
 const srcDirInput = args._[0];
 if (!srcDirInput) {
   console.error('用法: npm run publish -- <源目录> [选项]');
+  console.error('运行 npm run publish -- --help 查看完整说明');
   process.exit(1);
 }
 
