@@ -9,6 +9,7 @@
     "build": "astro build && node scripts/strip-unreferenced-assets.mjs",
     "preview": "astro preview",
     "publish": "node scripts/publish.mjs",
+    "deploy": "node scripts/deploy.mjs",
     "astro": "astro",
     "setup": "npm run gen:brand && npm run gen:icons && npm run gen:placeholders",
     "gen:brand": "node scripts/generate-brand.mjs",

@@ -150,6 +150,9 @@ if (images.length > 0) {
   for (const img of images) plan.push(`  + ${img.name}`);
 }
 for (const md of markdowns) {
+  if (hasChinese(md.name)) {
+    console.warn(`⚠ 随笔文件名含中文，URL 将显示为编码字符（可正常访问）。建议英文命名如 my-trip.md`);
+  }
   plan.push(`发布随笔 ${md.name} → src/content/${contentType}/`);
 }
 
@@ -210,17 +213,21 @@ for (const md of markdowns) {
   console.log(`✓ ${md.name} → src/content/${contentType}/ (title=${title}, pubDate=${pubDate})`);
 }
 
-// ── 提交源码 ─────────────────────────────────────────────────────────────────
+// ── 提交源码（只 add 本次发布涉及的路径，避免裹挟无关变更）─────────────────
 function run(cmd, opts = {}) {
   execSync(cmd, { stdio: 'inherit', cwd: ROOT, ...opts });
 }
+
+const addPaths = [];
+if (images.length) addPaths.push(`src/assets/projects/${slug}`);
+for (const md of markdowns) addPaths.push(`src/content/${contentType}`);
 
 const parts = [];
 if (images.length) parts.push(isNewProject ? `新项目「${projectTitle}」${images.length} 张照片` : `项目 ${slug} 追加 ${images.length} 张照片`);
 if (markdowns.length) parts.push(`${markdowns.length} 篇随笔`);
 const commitMsg = `publish: ${parts.join(' + ')}`;
 
-run('git add -A');
+run(`git add -- ${addPaths.map((p) => JSON.stringify(p)).join(' ')}`);
 try {
   run(`git commit -m ${JSON.stringify(commitMsg)}`);
 } catch {
@@ -236,18 +243,7 @@ if (!args.deploy) {
 }
 
 // ── 构建并部署 gh-pages ──────────────────────────────────────────────────────
-console.log('\n构建站点…');
-run('npm run build');
-
-const WT = '/tmp/deploy-gh-pages';
-run(`git worktree add ${WT} gh-pages 2>/dev/null || git -C ${WT} checkout gh-pages`);
-// 同步构建产物（保留 .git）
-run(`rsync -a --delete --exclude .git dist/ ${WT}/`);
-run(`git -C ${WT} add -A`);
-run(`git -C ${WT} commit -m ${JSON.stringify(`Deploy: ${commitMsg}`)}`);
-run(`git -C ${WT} push origin gh-pages`);
-run(`git worktree remove ${WT}`);
-console.log('✓ gh-pages 已部署');
+run(`node scripts/deploy.mjs --msg ${JSON.stringify(`Deploy: ${commitMsg}`)}`);
 
 console.log('\n🎉 发布完成！');
 if (images.length) console.log(`  摄影项目: ${SITE_URL}/project/${slug}/`);
