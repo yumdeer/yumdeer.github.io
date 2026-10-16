@@ -88,6 +88,7 @@ const grouped = categories.map((cat) => ({
         <div class="ambient">
           <button class="ambient-toggle" type="button" aria-expanded="false">播放器</button>
           <div class="ambient-panel" hidden>
+            <button class="ambient-close" type="button" aria-label="收起播放器">×</button>
             <p class="ambient-sec-label">音乐</p>
             <ul class="ambient-sounds" id="track-list"><li class="ambient-empty">加载中…</li></ul>
             <p class="ambient-sec-label">环境音</p>
@@ -243,11 +244,19 @@ const grouped = categories.map((cat) => ({
           src.loop = true;
 
           if (name === 'rain') {
-            src.buffer = this.buffer('white');
-            const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 400;
-            const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 7000;
-            const g = ctx.createGain(); g.gain.value = 0.5;
+            // 细雨：粉噪声打底（高频能量天然低于白噪）+ 带通 300–2400Hz。
+            // 之前白噪 + 7kHz 低通的宽频嘶鸣听起来是暴雨；收窄频段后是
+            // 柔和的"沙沙"细雨。慢 LFO 让雨势轻微起伏，避免机械的恒定感。
+            src.buffer = this.buffer('pink');
+            const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 300;
+            const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2400;
+            const g = ctx.createGain(); g.gain.value = 0.55;
+            const lfo = ctx.createOscillator(); lfo.frequency.value = 0.05;
+            const lfoG = ctx.createGain(); lfoG.gain.value = 0.08;
+            lfo.connect(lfoG); lfoG.connect(g.gain);
             src.connect(hp); hp.connect(lp); lp.connect(g); g.connect(master);
+            lfo.start();
+            this.oscillators.push(lfo);
           } else if (name === 'waves') {
             src.buffer = this.buffer('brown');
             const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 480; lp.Q.value = 0.7;
@@ -410,6 +419,12 @@ const grouped = categories.map((cat) => ({
           if (!panel.hidden && !player.loaded) {
             void player.load().then(renderTracks);
           }
+        });
+
+        // 面板右上角 ×：面板 fixed 定位会盖住侧栏底部的播放器开关，必须自带关闭入口
+        panel.querySelector('.ambient-close')?.addEventListener('click', () => {
+          panel.hidden = true;
+          toggle.setAttribute('aria-expanded', 'false');
         });
 
         panel.querySelectorAll<HTMLButtonElement>('button[data-sound]').forEach((b) => {

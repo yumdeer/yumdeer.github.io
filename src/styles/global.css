@@ -159,6 +159,28 @@ img {
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.12);
 }
 
+/* 面板右上角关闭：fixed 面板会盖住侧栏底部的开关按钮，需自带关闭入口 */
+.ambient-close {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  color: #bbb;
+  padding: 5px 8px;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: color 0.2s, background 0.2s;
+}
+
+.ambient-close:hover {
+  color: #111;
+  background: rgba(0, 0, 0, 0.05);
+}
+
 /* 分区标题（音乐/环境音）— 对齐 .nav-category 的小号大写标签风格 */
 .ambient-sec-label {
   font-size: 11px;
@@ -236,6 +258,15 @@ img {
   background: rgba(22, 22, 27, 0.78);
   border-color: rgba(255, 255, 255, 0.08);
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+}
+
+.theme-dark .ambient-close {
+  color: #666;
+}
+
+.theme-dark .ambient-close:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .theme-dark .ambient-sounds button {
