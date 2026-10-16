@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "astro dev",
     "start": "astro dev",
-    "build": "astro build && node scripts/strip-unreferenced-assets.mjs",
+    "build": "astro build && node scripts/strip-unreferenced-assets.mjs && rm -f dist/server/wrangler.json",
     "preview": "astro preview",
     "publish": "node scripts/publish.mjs",
     "migrate:d1": "node scripts/migrate-to-d1.mjs",
