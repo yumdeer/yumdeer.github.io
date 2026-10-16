@@ -20,3 +20,5 @@ node_modules/
 # os
 .DS_Store
 Thumbs.db
+
+# Cloudflare Workers Builds（Git 集成构建触发验证）
