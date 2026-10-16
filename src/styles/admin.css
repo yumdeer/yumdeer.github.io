@@ -1,0 +1,670 @@
+/* ───────────────────────────────────────────────────────────────────────────
+   管理后台工作台样式 — 轻量现代风（只随后台页面加载）
+   浅灰画布 + 白卡片 + 黑色主按钮，与公开站点的极简语言一致。
+   ─────────────────────────────────────────────────────────────────────────── */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+.admin-body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  background: #f6f6f7;
+  color: #18181b;
+  font-size: 13.5px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* ── 顶栏（毛玻璃 sticky）────────────────────────────────────────────── */
+
+.admin-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(16px) saturate(1.2);
+  -webkit-backdrop-filter: blur(16px) saturate(1.2);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.07);
+}
+
+.admin-topbar-inner {
+  max-width: 1180px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  padding: 0 28px;
+  height: 56px;
+}
+
+.admin-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+.admin-brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: #18181b;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.admin-brand-text {
+  font-size: 14px;
+}
+
+.admin-brand-text i {
+  font-style: normal;
+  margin: 0 4px;
+  color: #b1b1b8;
+  font-weight: 400;
+}
+
+.admin-nav {
+  display: flex;
+  gap: 4px;
+  flex: 1;
+}
+
+.admin-nav a {
+  padding: 6px 14px;
+  border-radius: 999px;
+  color: #6c6c75;
+  font-weight: 500;
+  transition: color 0.15s, background 0.15s;
+}
+
+.admin-nav a:hover {
+  color: #18181b;
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.admin-nav a.active {
+  color: #18181b;
+  background: #18181b;
+  color: #fff;
+}
+
+.admin-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.admin-view-site {
+  color: #6c6c75;
+  font-size: 12.5px;
+  transition: color 0.15s;
+}
+
+.admin-view-site:hover {
+  color: #18181b;
+}
+
+.admin-logout {
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12.5px;
+  color: #6c6c75;
+  cursor: pointer;
+  padding: 6px 10px;
+  border-radius: 8px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.admin-logout:hover {
+  color: #d4380d;
+  background: rgba(212, 56, 13, 0.08);
+}
+
+/* ── 主区 ───────────────────────────────────────────────────────────── */
+
+.admin-main {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 36px 28px 80px;
+}
+
+.admin-main h1 {
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  margin-bottom: 22px;
+}
+
+/* ── 概览统计卡片 ───────────────────────────────────────────────────── */
+
+.admin-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 14px;
+  margin-bottom: 22px;
+}
+
+.admin-stats a,
+.admin-stats span {
+  display: block;
+  background: #fff;
+  border: 1px solid #e9e9ec;
+  border-radius: 14px;
+  padding: 18px 20px 16px;
+  color: #6c6c75;
+  font-size: 12.5px;
+  transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
+}
+
+.admin-stats a:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.06);
+  border-color: #d9d9de;
+}
+
+.admin-stats b {
+  display: block;
+  font-size: 26px;
+  font-weight: 700;
+  color: #18181b;
+  line-height: 1.3;
+}
+
+/* ── 卡片（登录 / 初始化）───────────────────────────────────────────── */
+
+.admin-card {
+  max-width: 400px;
+  margin: 8vh auto 0;
+  background: #fff;
+  border: 1px solid #e9e9ec;
+  border-radius: 18px;
+  padding: 36px 36px 32px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.05);
+}
+
+.admin-card h1 {
+  margin-bottom: 6px;
+}
+
+/* ── 表单 ───────────────────────────────────────────────────────────── */
+
+.admin-form label,
+.admin-row-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12.5px;
+  color: #6c6c75;
+  font-weight: 500;
+}
+
+.admin-card .admin-form label {
+  margin-bottom: 14px;
+}
+
+.admin-form input:not([type='checkbox']):not([type='file']),
+.admin-form select,
+.admin-form textarea,
+.admin-row-form input:not([type='checkbox']):not([type='file']),
+.admin-table input,
+.admin-editor input,
+.admin-editor select,
+.admin-editor textarea {
+  font: inherit;
+  font-size: 13px;
+  color: #18181b;
+  background: #fff;
+  border: 1px solid #dcdce1;
+  border-radius: 9px;
+  padding: 8px 11px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.admin-form textarea,
+.admin-editor textarea {
+  resize: vertical;
+  line-height: 1.7;
+  font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Consolas, Menlo, monospace;
+  font-size: 12.5px;
+}
+
+.admin-form input:focus:not([type='checkbox']):not([type='file']),
+.admin-form select:focus,
+.admin-form textarea:focus,
+.admin-row-form input:focus:not([type='checkbox']):not([type='file']),
+.admin-table input:focus,
+.admin-editor input:focus,
+.admin-editor select:focus,
+.admin-editor textarea:focus {
+  border-color: #18181b;
+  box-shadow: 0 0 0 3px rgba(24, 24, 27, 0.1);
+}
+
+.admin-form input::placeholder,
+.admin-form textarea::placeholder,
+.admin-table input::placeholder,
+.admin-editor input::placeholder {
+  color: #b6b6bd;
+}
+
+/* 主按钮 / 次按钮 */
+.admin-form button[type='submit'],
+.admin-editor-actions button[type='submit'] {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  background: #18181b;
+  color: #fff;
+  border: 0;
+  border-radius: 9px;
+  padding: 9px 22px;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+}
+
+.admin-form button[type='submit']:hover,
+.admin-editor-actions button[type='submit']:hover {
+  background: #333338;
+}
+
+.admin-form button[type='submit']:active,
+.admin-editor-actions button[type='submit']:active {
+  transform: scale(0.98);
+}
+
+label.chk {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 7px !important;
+  cursor: pointer;
+  user-select: none;
+}
+
+label.chk input[type='checkbox'] {
+  accent-color: #18181b;
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+
+/* 横向表单组 */
+.admin-row-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  align-items: flex-end;
+  margin-bottom: 14px;
+}
+
+.admin-row-form label {
+  min-width: 120px;
+  flex: 1;
+}
+
+/* 文件上传 */
+.admin-file-label {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 10px !important;
+  background: #fff;
+  border: 1px dashed #c9c9d0;
+  border-radius: 12px;
+  padding: 14px 16px;
+  cursor: pointer;
+  margin-bottom: 14px;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.admin-file-label:hover {
+  border-color: #18181b;
+  background: #fafafa;
+}
+
+.admin-file-label input[type='file'] {
+  font-size: 12.5px;
+  color: #6c6c75;
+}
+
+.admin-progress {
+  font-size: 12.5px;
+  color: #6c6c75;
+  background: rgba(24, 24, 27, 0.05);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 14px;
+}
+
+.admin-msg {
+  font-size: 12.5px;
+  color: #d4380d;
+  min-height: 1em;
+}
+
+.admin-hint {
+  font-size: 12.5px;
+  color: #8e8e96;
+  line-height: 1.7;
+}
+
+/* 折叠面板（新建项目）*/
+.admin-details summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13.5px;
+  padding: 4px 0 12px;
+  user-select: none;
+  color: #18181b;
+}
+
+.admin-details summary:hover {
+  opacity: 0.75;
+}
+
+/* ── 表格 ───────────────────────────────────────────────────────────── */
+
+.admin-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: #fff;
+  border: 1px solid #e9e9ec;
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.admin-table th {
+  text-align: left;
+  font-size: 11.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: #8e8e96;
+  background: #fafafb;
+  padding: 11px 14px;
+  border-bottom: 1px solid #ececef;
+}
+
+.admin-table td {
+  padding: 9px 14px;
+  border-bottom: 1px solid #f1f1f4;
+  vertical-align: middle;
+}
+
+.admin-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.admin-table tbody tr {
+  transition: background 0.12s;
+}
+
+.admin-table tbody tr:hover {
+  background: #fafafb;
+}
+
+.admin-table code {
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 6px;
+  padding: 2px 7px;
+  font-size: 12px;
+  color: #52525b;
+}
+
+.admin-actions {
+  white-space: nowrap;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.admin-actions a {
+  color: #6c6c75;
+  font-size: 12.5px;
+  transition: color 0.15s;
+}
+
+.admin-actions a:hover {
+  color: #18181b;
+}
+
+/* 行内小按钮 */
+.btn-save {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  border: 0;
+  border-radius: 7px;
+  padding: 5px 12px;
+  background: rgba(24, 24, 27, 0.07);
+  color: #18181b;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.btn-save:hover {
+  background: rgba(24, 24, 27, 0.14);
+}
+
+.btn-danger {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  border: 0;
+  border-radius: 7px;
+  padding: 5px 12px;
+  background: none;
+  color: #b6b6bd;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.btn-danger:hover {
+  color: #d4380d;
+  background: rgba(212, 56, 13, 0.08);
+}
+
+/* ── 文章管理：左列表右编辑器 ───────────────────────────────────────── */
+
+.admin-article-layout {
+  display: grid;
+  grid-template-columns: 270px 1fr;
+  gap: 18px;
+  align-items: start;
+}
+
+.admin-article-list {
+  background: #fff;
+  border: 1px solid #e9e9ec;
+  border-radius: 14px;
+  padding: 8px;
+  position: sticky;
+  top: 74px;
+  max-height: calc(100vh - 110px);
+  overflow-y: auto;
+}
+
+.admin-article-list li {
+  display: flex;
+  gap: 2px;
+  align-items: stretch;
+}
+
+.btn-new {
+  width: 100%;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  border: 0;
+  border-radius: 9px;
+  padding: 9px 12px;
+  background: rgba(24, 24, 27, 0.07);
+  color: #18181b;
+  cursor: pointer;
+  margin-bottom: 6px;
+  transition: background 0.15s;
+}
+
+.btn-new:hover {
+  background: rgba(24, 24, 27, 0.14);
+}
+
+.btn-open {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+  border: 0;
+  background: none;
+  border-radius: 9px;
+  padding: 8px 11px;
+  cursor: pointer;
+  color: #3f3f46;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 0.12s, color 0.12s;
+}
+
+.btn-open:hover {
+  background: #fafafb;
+  color: #18181b;
+}
+
+.a-meta {
+  display: block;
+  font-size: 11px;
+  color: #a1a1aa;
+  font-weight: 400;
+}
+
+.admin-editor {
+  background: #fff;
+  border: 1px solid #e9e9ec;
+  border-radius: 14px;
+  padding: 20px;
+}
+
+.admin-editor textarea {
+  width: 100%;
+  margin: 4px 0 12px;
+}
+
+.admin-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.admin-editor-actions a {
+  font-size: 12.5px;
+  color: #6c6c75;
+}
+
+.admin-editor-actions a:hover {
+  color: #18181b;
+}
+
+/* ── 照片网格 ───────────────────────────────────────────────────────── */
+
+.admin-photo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 14px;
+  margin-top: 20px;
+}
+
+.admin-photo-grid figure {
+  background: #fff;
+  border: 1px solid #e9e9ec;
+  border-radius: 12px;
+  overflow: hidden;
+  transition: box-shadow 0.15s;
+}
+
+.admin-photo-grid figure:hover {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.07);
+}
+
+.admin-photo-grid img {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  display: block;
+  background: #f1f1f4;
+}
+
+.admin-photo-tools {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 8px 10px;
+}
+
+.admin-photo-tools .ph-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.ph-title {
+  border: 0 !important;
+  border-radius: 7px !important;
+  padding: 5px 8px !important;
+  font-size: 12.5px !important;
+}
+
+.ph-title:focus {
+  box-shadow: 0 0 0 2.5px rgba(24, 24, 27, 0.1) !important;
+}
+
+.ph-sort {
+  border: 0 !important;
+  border-radius: 7px !important;
+  padding: 5px 6px !important;
+  font-size: 12.5px !important;
+  background: #fafafb !important;
+}
+
+/* ── 响应式 ─────────────────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .admin-topbar-inner {
+    padding: 0 16px;
+    gap: 14px;
+  }
+
+  .admin-view-site {
+    display: none;
+  }
+
+  .admin-main {
+    padding: 24px 16px 60px;
+  }
+
+  .admin-article-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-article-list {
+    position: static;
+    max-height: 240px;
+  }
+}

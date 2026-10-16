@@ -3,8 +3,17 @@
 //  幻灯片 — 项目页核心组件：一次一张大图，键盘左右键 / 点击左右半屏 / 触摸滑动
 //  切换，左下角照片说明，右下角计数器。参照 yundongshu.com 的浏览体验。
 // ────────────────────────────────────────────────────────────────────────────
-import type { Slide } from '../lib/projects';
-import { SLIDE_SIZES } from '../lib/projects';
+import { SLIDE_SIZES } from '../lib/photo-sizes';
+
+interface Slide {
+  src: string;
+  srcset: string;
+  sizes?: string;
+  w: number;
+  h: number;
+  alt: string;
+  blur?: string | null;
+}
 
 interface Props {
   photos: Slide[];
@@ -20,7 +29,7 @@ const { photos, title } = Astro.props;
       <img
         src={p.src}
         srcset={p.srcset}
-        sizes={SLIDE_SIZES}
+        sizes={p.sizes ?? SLIDE_SIZES}
         alt={p.alt}
         class={i === 0 ? 'is-active' : ''}
         data-index={i}

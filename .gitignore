@@ -8,6 +8,9 @@ node_modules/
 # astro
 .astro/
 
+# wrangler 本地状态（本地 D1/R2 模拟数据，不提交）
+.wrangler/
+
 # logs & env
 *.log
 .env

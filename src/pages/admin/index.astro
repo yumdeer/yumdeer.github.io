@@ -1,0 +1,33 @@
+---
+// /admin — 后台首页（简单导航 + 概览）
+import AdminLayout from '../../layouts/AdminLayout.astro';
+import { getDB, listProjects, listArticles, listTracks } from '../../lib/db';
+
+let stats = { projects: 0, photos: 0, articles: 0, tracks: 0 };
+try {
+  const db = getDB();
+  const projects = await listProjects(db);
+  const articles = await listArticles(db, { includeDrafts: true });
+  const tracks = await listTracks(db);
+  const photoCount = await db.prepare('SELECT COUNT(*) AS n FROM photos').first<{ n: number }>();
+  stats = {
+    projects: projects.length,
+    photos: photoCount?.n ?? 0,
+    articles: articles.length,
+    tracks: tracks.length,
+  };
+} catch {
+  // DB 未初始化 → 提示先跑迁移/初始化
+}
+---
+
+<AdminLayout>
+  <h1>概览</h1>
+  <div class="admin-stats">
+    <a href="/admin/projects/"><b>{stats.projects}</b>个项目</a>
+    <span><b>{stats.photos}</b>张照片</span>
+    <a href="/admin/articles/"><b>{stats.articles}</b>篇文章</a>
+    <a href="/admin/music/"><b>{stats.tracks}</b>首曲目</a>
+  </div>
+  <p class="admin-hint">上传的照片在浏览器端压缩成 webp（缩略图 800px + 大图 2400px）后存入 R2；网站内容改动即时生效，无需重新部署。</p>
+</AdminLayout>

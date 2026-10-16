@@ -1,0 +1,36 @@
+---
+// /admin/login — 管理员登录
+import AdminLayout from '../../layouts/AdminLayout.astro';
+---
+
+<AdminLayout title="登录" bare>
+  <div class="admin-card">
+    <h1>登录</h1>
+    <form id="login-form" class="admin-form">
+      <label>邮箱 <input type="email" name="email" required /></label>
+      <label>密码 <input type="password" name="password" required /></label>
+      <button type="submit">登录</button>
+      <p class="admin-msg" data-msg></p>
+    </form>
+  </div>
+</AdminLayout>
+
+<script>
+  document.getElementById('login-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target as HTMLFormElement;
+    const msg = f.querySelector('[data-msg]')!;
+    const r = await fetch('/api/admin/auth', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        action: 'login',
+        email: (f.elements.namedItem('email') as HTMLInputElement).value,
+        password: (f.elements.namedItem('password') as HTMLInputElement).value,
+      }),
+    });
+    const data = await r.json();
+    if (r.ok) location.href = '/admin/';
+    else msg.textContent = data.error || '登录失败';
+  });
+</script>

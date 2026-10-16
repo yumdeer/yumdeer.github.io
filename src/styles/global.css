@@ -118,6 +118,156 @@ img {
   letter-spacing: 0.5px;
 }
 
+/* ── 环境音播放器（侧栏底部，向上弹出面板）────────────────────────────── */
+
+.ambient {
+  position: relative;
+  margin-top: 40px;
+}
+
+.ambient-toggle {
+  border: 0;
+  padding: 0;
+  background: none;
+  font: inherit;
+  font-size: 11px;
+  color: #999;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.ambient-toggle:hover,
+.ambient-toggle.on {
+  color: #111;
+}
+
+/* 固定在视口左下角：宽度落在侧栏内，不随侧栏滚动、不遮挡导航 */
+.ambient-panel {
+  position: fixed;
+  left: 14px;
+  bottom: 14px;
+  width: 232px;
+  max-height: min(70vh, 420px);
+  overflow-y: auto;
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  padding: 10px 0 8px;
+  z-index: 300;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.12);
+}
+
+/* 分区标题（音乐/环境音）— 对齐 .nav-category 的小号大写标签风格 */
+.ambient-sec-label {
+  font-size: 11px;
+  color: #999;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin: 12px 14px 4px;
+}
+
+.ambient-sec-label:first-child {
+  margin-top: 2px;
+}
+
+.ambient-empty {
+  font-size: 12px;
+  color: #bbb;
+  padding: 6px 14px;
+}
+
+.ambient-sounds button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  color: #666;
+  padding: 7px 14px;
+  cursor: pointer;
+}
+
+.ambient-sounds button:hover {
+  background: rgba(0, 0, 0, 0.045);
+  color: #111;
+}
+
+.ambient-sounds button.playing {
+  color: #111;
+}
+
+.ambient-sounds button.playing::before {
+  content: '♪ ';
+}
+
+.ambient-volume {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: #999;
+  padding: 9px 12px 4px;
+  margin-top: 4px;
+  border-top: 1px solid #f0f0f0;
+  cursor: default;
+}
+
+.ambient-volume input[type='range'] {
+  flex: 1;
+  accent-color: #111;
+  cursor: pointer;
+}
+
+/* 暗夜主题（随笔版块）*/
+.theme-dark .ambient-toggle {
+  color: #6b6b74;
+}
+
+.theme-dark .ambient-toggle:hover,
+.theme-dark .ambient-toggle.on {
+  color: #ffffff;
+}
+
+.theme-dark .ambient-panel {
+  background: rgba(22, 22, 27, 0.78);
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+}
+
+.theme-dark .ambient-sounds button {
+  color: #9a9aa3;
+}
+
+.theme-dark .ambient-sec-label {
+  color: #6b6b74;
+}
+
+.theme-dark .ambient-empty {
+  color: #55555e;
+}
+
+.theme-dark .ambient-sounds button:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #ffffff;
+}
+
+.theme-dark .ambient-sounds button.playing {
+  color: #ffffff;
+}
+
+.theme-dark .ambient-volume {
+  color: #6b6b74;
+  border-top-color: #1e1e23;
+}
+
+.theme-dark .ambient-volume input[type='range'] {
+  accent-color: #eee;
+}
+
 .content {
   position: relative;
   flex: 1;

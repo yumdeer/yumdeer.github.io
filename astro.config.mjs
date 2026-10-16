@@ -1,12 +1,18 @@
 import { defineConfig } from 'astro/config';
 import sitemap from '@astrojs/sitemap';
 import mdx from '@astrojs/mdx';
+import cloudflare from '@astrojs/cloudflare';
 // Declared as a direct dependency: since Astro 7.3 it is a peer dependency of
 // `astro` and `@astrojs/mdx` (which renders .mdx through this processor).
 import { unified } from '@astrojs/markdown-remark';
 
 // https://astro.build/config
 export default defineConfig({
+  // SSR on Cloudflare Pages — 页面按请求渲染，内容来自 D1 数据库 + R2 存储，
+  // 管理后台可在前端直接增删改（不再需要重新构建部署）。
+  // platformProxy: astro dev 自动挂载 wrangler.toml 里的 D1/R2 本地模拟。
+  adapter: cloudflare({ platformProxy: { enabled: true } }),
+  output: 'server',
   // MDX powers the blogs: Markdown + components, so posts can drop in
   // gallery-style <Photo> / <Gallery> blocks. Generate sitemap-index.xml +
   // sitemap-0.xml (referenced from robots.txt).

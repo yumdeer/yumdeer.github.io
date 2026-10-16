@@ -1,0 +1,138 @@
+---
+// /admin/articles — 文章管理：列表 + 新建/编辑（Markdown 编辑器，支持粘贴带 frontmatter 的旧文）
+import AdminLayout from '../../layouts/AdminLayout.astro';
+import { getDB, listArticles } from '../../lib/db';
+
+let articles: Awaited<ReturnType<typeof listArticles>> = [];
+try {
+  articles = await listArticles(getDB(), { includeDrafts: true });
+} catch {}
+---
+
+<AdminLayout title="文章">
+  <h1>文章</h1>
+
+  <div class="admin-article-layout">
+    <ul class="admin-article-list" id="article-list">
+      <li><button class="btn-new" type="button">＋ 新建文章</button></li>
+      {articles.map((a) => (
+        <li>
+          <button class="btn-open" type="button" data-slug={a.slug}>
+            {a.draft ? '[草稿] ' : ''}{a.title}
+            <span class="a-meta">{a.collection === 'photography' ? '摄影' : '技术'} · {a.pub_date}</span>
+          </button>
+          <button class="btn-danger btn-del" type="button" data-slug={a.slug}>删</button>
+        </li>
+      ))}
+    </ul>
+
+    <form class="admin-editor" id="editor" data-slug="">
+      <div class="admin-row-form">
+        <label>标题 <input name="title" required /></label>
+        <label>分类
+          <select name="collection">
+            <option value="photography">摄影随笔</option>
+            <option value="tech">技术</option>
+          </select>
+        </label>
+        <label>发布日期 <input name="pubDate" type="date" /></label>
+        <label>简介 <input name="description" placeholder="一两句话（可选）" /></label>
+        <label class="chk"><input type="checkbox" name="draft" /> 草稿（不公开）</label>
+      </div>
+      <div class="admin-row-form">
+        <label>封面图 URL（可选） <input name="coverUrl" placeholder="/api/media/… 或 https://…" /></label>
+        <label>封面 alt <input name="coverAlt" /></label>
+      </div>
+      <textarea name="bodyMd" rows="20" placeholder="Markdown 正文。也可直接粘贴带 frontmatter（--- title: … ---）的旧文，勾选下方选项自动解析。"></textarea>
+      <label class="chk"><input type="checkbox" name="parseFrontmatter" /> 粘贴的是含 frontmatter 的完整旧文（自动提取 title/日期等）</label>
+      <div class="admin-editor-actions">
+        <button type="submit">保存</button>
+        <a id="preview-link" href="/blog/" target="_blank" hidden>预览 ↗</a>
+        <span class="admin-msg" data-msg></span>
+      </div>
+    </form>
+  </div>
+</AdminLayout>
+
+<script>
+  const editor = document.getElementById('editor') as HTMLFormElement;
+  const msg = editor.querySelector('[data-msg]')!;
+  const previewLink = editor.querySelector('#preview-link') as HTMLAnchorElement;
+  const v = (n: string) => editor.elements.namedItem(n) as HTMLInputElement;
+  let currentSlug = '';
+
+  // 打开（编辑）
+  document.getElementById('article-list')?.addEventListener('click', async (e) => {
+    const btn = e.target as HTMLElement;
+
+    if (btn.classList.contains('btn-new')) {
+      currentSlug = '';
+      editor.reset();
+      editor.dataset.slug = '';
+      v('pubDate').value = new Date().toISOString().slice(0, 10);
+      previewLink.hidden = true;
+      return;
+    }
+
+    if (btn.classList.contains('btn-open')) {
+      const slug = btn.dataset.slug!;
+      const r = await fetch('/api/admin/articles');
+      const list = await r.json();
+      const a = list.find((x: any) => x.slug === slug);
+      if (!a) return;
+      currentSlug = slug;
+      editor.dataset.slug = slug;
+      v('title').value = a.title;
+      (editor.elements.namedItem('collection') as HTMLSelectElement).value = a.collection;
+      v('pubDate').value = a.pub_date;
+      v('description').value = a.description ?? '';
+      v('coverUrl').value = a.cover_url ?? '';
+      v('coverAlt').value = a.cover_alt ?? '';
+      v('draft').checked = !!a.draft;
+      (editor.elements.namedItem('bodyMd') as HTMLTextAreaElement).value = a.body_md;
+      v('parseFrontmatter').checked = false;
+      previewLink.hidden = false;
+      previewLink.href = `/blog/${a.collection}/${a.slug}/`;
+      return;
+    }
+
+    if (btn.classList.contains('btn-del')) {
+      if (!confirm('删除这篇文章？')) return;
+      await fetch(`/api/admin/articles/${btn.dataset.slug}`, { method: 'DELETE' });
+      location.reload();
+    }
+  });
+
+  // 保存（新建或更新）
+  editor.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    msg.textContent = '保存中…';
+    const r = await fetch('/api/admin/articles', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        slug: currentSlug || undefined,
+        title: v('title').value,
+        collection: (editor.elements.namedItem('collection') as HTMLSelectElement).value,
+        pubDate: v('pubDate').value || undefined,
+        description: v('description').value || undefined,
+        coverUrl: v('coverUrl').value || undefined,
+        coverAlt: v('coverAlt').value || undefined,
+        draft: v('draft').checked,
+        bodyMd: (editor.elements.namedItem('bodyMd') as HTMLTextAreaElement).value,
+        parseFrontmatter: v('parseFrontmatter').checked,
+      }),
+    });
+    const data = await r.json();
+    if (r.ok) {
+      if (!currentSlug) {
+        location.reload(); // 新建后刷新列表
+      } else {
+        msg.textContent = '已保存 ✓';
+        setTimeout(() => (msg.textContent = ''), 1500);
+      }
+    } else {
+      msg.textContent = data.error || '保存失败';
+    }
+  });
+</script>

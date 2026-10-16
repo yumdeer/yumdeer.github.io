@@ -1,28 +1,23 @@
 ---
-// 博客列表 — 汇总两个集合（摄影随笔 / 技术），按日期倒序。
+// 博客列表 — 文章来自 D1，按日期倒序。暗夜主题。
 import Layout from '../../layouts/Layout.astro';
-import { getCollection } from 'astro:content';
+import { getDB, listArticles } from '../../lib/db';
 
-const collections = [
-  { name: 'photography', label: '摄影' },
-  { name: 'tech', label: '技术' },
-] as const;
+let posts: {
+  slug: string;
+  collection: string;
+  title: string;
+  pub_date: string;
+  draft: number;
+}[] = [];
+try {
+  posts = await listArticles(getDB());
+} catch {
+  // DB 未初始化
+}
 
-const posts = (
-  await Promise.all(
-    collections.map(async (c) => {
-      const entries = await getCollection(c.name, ({ data }) =>
-        import.meta.env.PROD ? !data.draft : true,
-      );
-      return entries.map((e) => ({ ...e, collection: c.name, label: c.label }));
-    }),
-  )
-)
-  .flat()
-  .sort((a, b) => +new Date(b.data.pubDate) - +new Date(a.data.pubDate));
-
-const fmt = (d: Date) =>
-  `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')}`;
+const fmt = (d: string) => d.replaceAll('-', '.');
+const label = (c: string) => (c === 'photography' ? '摄影' : '技术');
 ---
 
 <Layout title="随笔" description="摄影随笔与技术文章" activePath="/blog/" theme="dark">
@@ -32,8 +27,11 @@ const fmt = (d: Date) =>
       <ul class="post-list">
         {posts.map((post) => (
           <li>
-            <time>{fmt(post.data.pubDate)}</time>
-            <a href={`/blog/${post.collection}/${post.id}/`}>{post.data.title}</a>
+            <time>{fmt(post.pub_date)}</time>
+            <a href={`/blog/${post.collection}/${post.slug}/`}>
+              {post.draft ? '[草稿] ' : ''}{post.title}
+            </a>
+            <span class="post-coll">{label(post.collection)}</span>
           </li>
         ))}
       </ul>

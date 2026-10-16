@@ -14,10 +14,10 @@ export const site = {
   // Optional second-script name (e.g. a Chinese 中文名) shown under the brand and
   // in a couple of prose pages. Leave it '' to hide it everywhere. See the README
   // for how to self-host a font subset so it renders identically on every device.
-  nameZh: '花鹿',
-  title: '花鹿摄影集',
+  nameZh: '张鹿溪',
+  title: '张鹿溪摄影集',
   description:
-    '花鹿的摄影集与博客 — 数码与胶片画廊、按月照片日历，以及摄影随笔。',
+    '张鹿溪的摄影集与博客 — 数码与胶片画廊、按月照片日历，以及摄影随笔。',
 };
 
 // 侧栏导航由 Layout.astro 根据项目数据自动生成（作品 / 随笔 / 关于）。

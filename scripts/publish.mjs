@@ -38,7 +38,7 @@ const IMG_EXT = /\.(jpe?g|png|webp|avif)$/i;
 const SITE_URL = 'https://flowerdeer.cn';
 
 // ── 帮助文档 ────────────────────────────────────────────────────────────────
-const HELP = `花鹿摄影集 · 一键发布脚本
+const HELP = `张鹿溪摄影集 · 一键发布脚本
 把一个目录里的照片和 Markdown 随笔自动发布到 flowerdeer.cn
 
 用法

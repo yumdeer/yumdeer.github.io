@@ -1,33 +1,43 @@
 ---
-// 首页 — 精选作品随机网格（每次构建随机排序），点击进入对应项目幻灯片。
+// 首页 — 精选作品网格（SSR：照片来自 D1，每次请求随机排序）。
 import Layout from '../layouts/Layout.astro';
-import { getProjects, GRID_SIZES } from '../lib/projects';
+import { getDB, listAllPhotos, r2Key } from '../lib/db';
+import { GRID_SIZES } from '../lib/photo-sizes';
 
-const projects = await getProjects();
-
-// 汇总所有照片并随机打乱（构建期随机，与参考站一致）
-const all = projects.flatMap((p) =>
-  p.photos.map((photo) => ({ photo, slug: p.slug })),
-);
-for (let i = all.length - 1; i > 0; i--) {
-  const j = Math.floor(Math.random() * (i + 1));
-  [all[i], all[j]] = [all[j], all[i]];
+let all: { slug: string; projectSlug: string; title: string; blur: string | null }[] = [];
+try {
+  const photos = await listAllPhotos(getDB());
+  all = photos.map((p) => ({
+    slug: p.slug,
+    projectSlug: (p as any).project_slug,
+    title: p.title,
+    blur: p.blur,
+  }));
+  // 随机打乱（参考站风格）
+  for (let i = all.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [all[i], all[j]] = [all[j], all[i]];
+  }
+} catch {
+  // DB 未初始化时空网格
 }
 ---
 
 <Layout>
   <section class="selected-grid" aria-label="精选作品">
-    {all.map(({ photo, slug }) => (
-      <a href={`/project/${slug}/`} aria-label={photo.alt}>
+    {all.map(({ slug, projectSlug, title, blur }) => (
+      <a href={`/project/${projectSlug}/`} aria-label={title || ' photograph'}>
+        {blur && <img src={blur} alt="" class="grid-blur" aria-hidden="true" />}
         <img
-          src={photo.src}
-          srcset={photo.srcset}
+          src={`/api/media/${r2Key.photoThumb(projectSlug, slug)}`}
+          srcset={(`/api/media/${r2Key.photoThumb(projectSlug, slug)}`) + ' 800w, ' + (`/api/media/${r2Key.photoFull(projectSlug, slug)}`) + ' 2400w'}
           sizes={GRID_SIZES}
-          alt={photo.alt}
+          alt={title}
           loading="lazy"
           decoding="async"
         />
       </a>
     ))}
+    {all.length === 0 && <p class="grid-empty">还没有作品。</p>}
   </section>
 </Layout>

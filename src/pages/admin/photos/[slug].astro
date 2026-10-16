@@ -1,0 +1,150 @@
+---
+// /admin/photos/[slug] — 照片管理：浏览器压缩上传（多选）/ 重命名 / 排序 / 删除
+import AdminLayout from '../../../layouts/AdminLayout.astro';
+import { getDB, getProject, listPhotos, r2Key } from '../../../lib/db';
+
+const { slug } = Astro.params;
+let project: Awaited<ReturnType<typeof getProject>>;
+let photos: Awaited<ReturnType<typeof listPhotos>> = [];
+try {
+  const db = getDB();
+  project = slug ? await getProject(db, slug) : undefined;
+  if (project) photos = await listPhotos(db, project.id);
+} catch {}
+if (!project) return Astro.redirect('/404');
+---
+
+<AdminLayout title={`照片 · ${project.title}`}>
+  <h1>照片 · {project.title}</h1>
+
+  <form class="admin-form" id="upload-form">
+    <label class="admin-file-label">
+      <input type="file" accept="image/*" multiple id="file-input" />
+      选择图片（可多选）— 浏览器自动压缩为 webp 后上传
+    </label>
+    <div class="admin-progress" id="progress" hidden></div>
+    <button type="submit" id="upload-btn">上传</button>
+  </form>
+
+  <div class="admin-photo-grid" id="photo-grid">
+    {photos.map((p) => (
+      <figure data-id={p.id}>
+        <img src={`/api/media/${r2Key.photoThumb(project.slug, p.slug)}`} alt={p.title} loading="lazy" />
+        <input class="ph-title" value={p.title} placeholder="标题" />
+        <div class="admin-photo-tools">
+          <input class="ph-sort" type="number" value={p.sort_order} style="width:3.5em" title="排序" />
+          <button class="btn-save" type="button">存</button>
+          <button class="btn-danger btn-del" type="button">删</button>
+        </div>
+      </figure>
+    ))}
+  </div>
+  {photos.length === 0 && <p class="admin-hint">还没有照片。</p>}
+</AdminLayout>
+
+<script>
+  // ── 浏览器端压缩：canvas 缩放 → webp（thumb 800px / full 2400px）+ 24px 模糊占位 ──
+  const MAX_THUMB = 800;
+  const MAX_FULL = 2400;
+
+  async function processFile(file: File) {
+    const bmp = await createImageBitmap(file);
+    const scaleSide = (max: number) => {
+      const s = Math.min(1, max / Math.max(bmp.width, bmp.height));
+      return [Math.round(bmp.width * s), Math.round(bmp.height * s)] as const;
+    };
+
+    const toWebpB64 = (w: number, h: number, q: number) =>
+      new Promise<string>((resolve) => {
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        c.getContext('2d')!.drawImage(bmp, 0, 0, w, h);
+        c.toBlob((b) => {
+          const fr = new FileReader();
+          fr.onload = () => resolve((fr.result as string).split(',')[1]);
+          fr.readAsDataURL(b!);
+        }, 'image/webp', q);
+      });
+
+    const [tw, th] = scaleSide(MAX_THUMB);
+    const [fw, fh] = scaleSide(MAX_FULL);
+
+    // 模糊占位：24px 缩略 → data URL（直接存 D1）
+    const bc = document.createElement('canvas');
+    bc.width = 24;
+    bc.height = Math.max(1, Math.round((24 * bmp.height) / bmp.width));
+    bc.getContext('2d')!.drawImage(bmp, 0, 0, bc.width, bc.height);
+    const blurDataUrl = bc.toDataURL('image/webp', 0.5);
+
+    return {
+      name: file.name,
+      title: '',
+      thumbB64: await toWebpB64(tw, th, 0.8),
+      fullB64: await toWebpB64(fw, fh, 0.82),
+      blurDataUrl,
+      w: fw,
+      h: fh,
+    };
+  }
+
+  const slug = location.pathname.split('/')[3];
+
+  document.getElementById('upload-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const input = document.getElementById('file-input') as HTMLInputElement;
+    const files = [...(input.files ?? [])];
+    if (!files.length) return alert('先选择图片');
+
+    const btn = document.getElementById('upload-btn') as HTMLButtonElement;
+    const progress = document.getElementById('progress') as HTMLElement;
+    btn.disabled = true;
+    progress.hidden = false;
+
+    const photos = [];
+    for (let i = 0; i < files.length; i++) {
+      progress.textContent = `压缩中 ${i + 1}/${files.length}…`;
+      photos.push(await processFile(files[i]));
+    }
+    progress.textContent = '上传中…';
+    const r = await fetch('/api/admin/photos', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ projectSlug: slug, photos }),
+    });
+    if (r.ok) location.reload();
+    else {
+      alert((await r.json()).error || '上传失败');
+      btn.disabled = false;
+      progress.hidden = true;
+    }
+  });
+
+  // 标题/排序/删除
+  document.getElementById('photo-grid')?.addEventListener('click', async (e) => {
+    const btn = e.target as HTMLElement;
+    const fig = btn.closest('figure[data-id]');
+    if (!fig) return;
+    const id = Number(fig.dataset.id);
+
+    if (btn.classList.contains('btn-save')) {
+      await fetch('/api/admin/photos', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          updates: [{
+            id,
+            title: (fig.querySelector('.ph-title') as HTMLInputElement).value,
+            sort_order: Number((fig.querySelector('.ph-sort') as HTMLInputElement).value),
+          }],
+        }),
+      });
+      btn.textContent = '✓';
+      setTimeout(() => (btn.textContent = '存'), 1000);
+    }
+    if (btn.classList.contains('btn-del')) {
+      if (!confirm('删除这张照片？')) return;
+      await fetch(`/api/admin/photos/${id}`, { method: 'DELETE' });
+      fig.remove();
+    }
+  });
+</script>

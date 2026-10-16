@@ -1,0 +1,95 @@
+---
+// /admin/projects — 项目管理：新建 / 编辑元数据 / 删除 / 进入照片管理
+import AdminLayout from '../../layouts/AdminLayout.astro';
+import { getDB, listProjects } from '../../lib/db';
+
+let projects: Awaited<ReturnType<typeof listProjects>> = [];
+try {
+  projects = await listProjects(getDB());
+} catch {}
+---
+
+<AdminLayout title="项目">
+  <h1>项目</h1>
+
+  <details class="admin-details" open={projects.length === 0}>
+    <summary>新建项目</summary>
+    <form class="admin-form admin-row-form" id="new-project">
+      <label>标题 <input name="title" required placeholder="2026 旅途" /></label>
+      <label>slug（URL，可留空自动生成） <input name="slug" placeholder="trip-2026" /></label>
+      <label>分类 <input name="category" value="作品" /></label>
+      <label>年份 <input name="year" placeholder="2026" /></label>
+      <label>说明 <input name="description" placeholder="一段介绍（可选）" /></label>
+      <button type="submit">创建</button>
+    </form>
+  </details>
+
+  <table class="admin-table" id="projects-table">
+    <thead><tr><th>排序</th><th>标题</th><th>slug</th><th>分类</th><th>年份</th><th>操作</th></tr></thead>
+    <tbody>
+      {projects.map((p) => (
+        <tr data-slug={p.slug}>
+          <td><input class="p-sort" type="number" value={p.sort_order} style="width:4em" /></td>
+          <td><input class="p-title" value={p.title} /></td>
+          <td><code>{p.slug}</code></td>
+          <td><input class="p-category" value={p.category} style="width:5em" /></td>
+          <td><input class="p-year" value={p.year ?? ''} style="width:4em" /></td>
+          <td class="admin-actions">
+            <button class="btn-save" type="button">保存</button>
+            <a href={`/admin/photos/${p.slug}/`}>照片</a>
+            <a href={`/project/${p.slug}/`} target="_blank">预览 ↗</a>
+            <button class="btn-danger btn-del" type="button">删除</button>
+          </td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+  {projects.length === 0 && <p class="admin-hint">还没有项目，先新建一个。</p>}
+</AdminLayout>
+
+<script>
+  const table = document.getElementById('projects-table');
+
+  // 新建
+  document.getElementById('new-project')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target as HTMLFormElement;
+    const v = (n: string) => (f.elements.namedItem(n) as HTMLInputElement).value;
+    const r = await fetch('/api/admin/projects', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: v('title'), slug: v('slug'), category: v('category'), year: v('year'), description: v('description') }),
+    });
+    if (r.ok) location.reload();
+    else alert((await r.json()).error);
+  });
+
+  // 行内保存 / 删除
+  table?.addEventListener('click', async (e) => {
+    const btn = e.target as HTMLElement;
+    const tr = btn.closest('tr[data-slug]');
+    if (!tr) return;
+    const slug = tr.dataset.slug!;
+
+    if (btn.classList.contains('btn-save')) {
+      const r = await fetch(`/api/admin/projects/${slug}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          title: (tr.querySelector('.p-title') as HTMLInputElement).value,
+          category: (tr.querySelector('.p-category') as HTMLInputElement).value,
+          year: (tr.querySelector('.p-year') as HTMLInputElement).value,
+          sort_order: Number((tr.querySelector('.p-sort') as HTMLInputElement).value),
+        }),
+      });
+      btn.textContent = r.ok ? '已保存' : '失败';
+      setTimeout(() => (btn.textContent = '保存'), 1200);
+    }
+
+    if (btn.classList.contains('btn-del')) {
+      if (!confirm(`删除项目「${slug}」及其全部照片？`)) return;
+      await fetch(`/api/admin/projects/${slug}`, { method: 'DELETE' });
+      location.reload();
+    }
+  });
+</script>

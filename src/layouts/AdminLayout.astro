@@ -1,0 +1,61 @@
+---
+// 管理后台布局 — 独立于公开站点的轻量工作台。
+// 样式在 styles/admin.css（只随后台页面加载，不影响公开站点）。
+import '../styles/admin.css';
+
+interface Props {
+  title?: string;
+  bare?: boolean; // 登录/初始化页不显示顶栏
+}
+const { title = '管理', bare = false } = Astro.props;
+const path = Astro.url.pathname;
+// 照片管理页（/admin/photos/**）从项目表格进入，导航仍高亮「项目」
+const isActive = (p: string) =>
+  p === '/admin/projects/'
+    ? path.startsWith('/admin/projects/') || path.startsWith('/admin/photos/')
+    : path === p || path.startsWith(p);
+---
+
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{title} · 张鹿溪管理后台</title>
+    <link rel="icon" type="image/png" href="/favicon.png?v=2" />
+  </head>
+  <body class="admin-body">
+    {!bare && (
+      <header class="admin-topbar">
+        <div class="admin-topbar-inner">
+          <a href="/admin/" class="admin-brand">
+            <span class="admin-brand-mark">鹿</span>
+            <span class="admin-brand-text">张鹿溪<i>·</i>管理</span>
+          </a>
+          <nav class="admin-nav">
+            <a href="/admin/projects/" class={isActive('/admin/projects/') ? 'active' : ''}>项目</a>
+            <a href="/admin/articles/" class={isActive('/admin/articles/') ? 'active' : ''}>文章</a>
+            <a href="/admin/music/" class={isActive('/admin/music/') ? 'active' : ''}>音乐</a>
+          </nav>
+          <div class="admin-topbar-actions">
+            <a href="/" target="_blank" class="admin-view-site">查看站点 ↗</a>
+            <button type="button" id="admin-logout" class="admin-logout">登出</button>
+          </div>
+        </div>
+      </header>
+    )}
+    <main class="admin-main">
+      <slot />
+    </main>
+    <script>
+      document.getElementById('admin-logout')?.addEventListener('click', async () => {
+        await fetch('/api/admin/auth', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ action: 'logout' }),
+        });
+        location.href = '/admin/login';
+      });
+    </script>
+  </body>
+</html>

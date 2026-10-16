@@ -1,0 +1,47 @@
+---
+// /admin/setup — 首次注册管理员（仅在 users 表为空时可访问）
+import AdminLayout from '../../layouts/AdminLayout.astro';
+import { getDB } from '../../lib/db';
+import { countUsers } from '../../lib/auth';
+
+let hasUsers = true;
+try {
+  hasUsers = (await countUsers(getDB())) > 0;
+} catch {
+  // DB 未初始化 → 视为可 setup（API 会再校验）
+}
+if (hasUsers) return Astro.redirect('/admin/login');
+---
+
+<AdminLayout title="初始化" bare>
+  <div class="admin-card">
+    <h1>初始化管理员</h1>
+    <p class="admin-hint">首次使用：创建管理员账号（之后此页自动关闭）。</p>
+    <form id="setup-form" class="admin-form">
+      <label>邮箱 <input type="email" name="email" required placeholder="you@example.com" /></label>
+      <label>密码（至少 8 位） <input type="password" name="password" minlength="8" required /></label>
+      <button type="submit">创建并进入后台</button>
+      <p class="admin-msg" data-msg></p>
+    </form>
+  </div>
+</AdminLayout>
+
+<script>
+  document.getElementById('setup-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target as HTMLFormElement;
+    const msg = f.querySelector('[data-msg]')!;
+    const r = await fetch('/api/admin/auth', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        action: 'setup',
+        email: (f.elements.namedItem('email') as HTMLInputElement).value,
+        password: (f.elements.namedItem('password') as HTMLInputElement).value,
+      }),
+    });
+    const data = await r.json();
+    if (r.ok) location.href = '/admin/';
+    else msg.textContent = data.error || '创建失败';
+  });
+</script>

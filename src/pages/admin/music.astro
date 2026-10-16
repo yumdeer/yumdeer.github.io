@@ -1,0 +1,110 @@
+---
+// /admin/music — 曲目管理：上传 mp3（自动读时长）/ 删除
+import AdminLayout from '../../layouts/AdminLayout.astro';
+import { getDB, listTracks } from '../../lib/db';
+
+let tracks: Awaited<ReturnType<typeof listTracks>> = [];
+try {
+  tracks = await listTracks(getDB());
+} catch {}
+---
+
+<AdminLayout title="音乐">
+  <h1>音乐</h1>
+  <p class="admin-hint">上传的曲目出现在全站播放器的「音乐」区（侧栏底部）。环境音（雨声/海浪等）为实时合成，无需上传。</p>
+
+  <form class="admin-form" id="music-form">
+    <label class="admin-file-label">
+      <input type="file" accept="audio/mpeg,audio/*" id="audio-input" />
+      选择音频文件（mp3）
+    </label>
+    <div class="admin-row-form">
+      <label>标题 <input name="title" required placeholder="曲名" /></label>
+      <label>艺术家 <input name="artist" placeholder="可选" /></label>
+    </div>
+    <div class="admin-progress" id="music-progress" hidden></div>
+    <button type="submit" id="music-btn">上传</button>
+  </form>
+
+  <table class="admin-table" id="tracks-table">
+    <thead><tr><th>标题</th><th>艺术家</th><th>时长</th><th>操作</th></tr></thead>
+    <tbody>
+      {tracks.map((t) => (
+        <tr data-slug={t.slug}>
+          <td>{t.title}</td>
+          <td>{t.artist ?? ''}</td>
+          <td>{Math.floor(t.duration_sec / 60)}:{String(t.duration_sec % 60).padStart(2, '0')}</td>
+          <td class="admin-actions">
+            <audio controls preload="none" style="height:2em" src={`/api/media/audio/${t.slug}.mp3`}></audio>
+            <button class="btn-danger btn-del" type="button">删除</button>
+          </td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</AdminLayout>
+
+<script>
+  // 自动读取时长填提示
+  document.getElementById('audio-input')?.addEventListener('change', (e) => {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+    const titleInput = (document.getElementById('music-form') as HTMLFormElement).elements.namedItem('title') as HTMLInputElement;
+    if (!titleInput.value) titleInput.value = file.name.replace(/\.[^.]+$/, '');
+  });
+
+  // 上传：读文件为 base64 + 预读时长
+  document.getElementById('music-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target as HTMLFormElement;
+    const file = (document.getElementById('audio-input') as HTMLInputElement).files?.[0];
+    if (!file) return alert('先选择音频文件');
+    const title = (f.elements.namedItem('title') as HTMLInputElement).value;
+    const artist = (f.elements.namedItem('artist') as HTMLInputElement).value;
+
+    const btn = document.getElementById('music-btn') as HTMLButtonElement;
+    const progress = document.getElementById('music-progress') as HTMLElement;
+    btn.disabled = true;
+    progress.hidden = false;
+    progress.textContent = '读取时长…';
+
+    // 用 audio 元素读时长
+    const duration = await new Promise<number>((resolve) => {
+      const a = new Audio(URL.createObjectURL(file));
+      a.addEventListener('loadedmetadata', () => {
+        URL.revokeObjectURL(a.src);
+        resolve(Math.round(a.duration) || 0);
+      });
+      a.addEventListener('error', () => resolve(0));
+    });
+
+    progress.textContent = '上传中…';
+    const b64 = await new Promise<string>((resolve) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve((fr.result as string).split(',')[1]);
+      fr.readAsDataURL(file);
+    });
+
+    const r = await fetch('/api/admin/tracks', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: file.name, title, artist, durationSec: duration, audioB64: b64 }),
+    });
+    if (r.ok) location.reload();
+    else {
+      alert((await r.json()).error || '上传失败');
+      btn.disabled = false;
+      progress.hidden = true;
+    }
+  });
+
+  // 删除
+  document.getElementById('tracks-table')?.addEventListener('click', async (e) => {
+    const btn = e.target as HTMLElement;
+    if (!btn.classList.contains('btn-del')) return;
+    const slug = btn.closest('tr[data-slug]')!.dataset.slug!;
+    if (!confirm(`删除曲目「${slug}」？`)) return;
+    await fetch(`/api/admin/tracks/${slug}`, { method: 'DELETE' });
+    location.reload();
+  });
+</script>

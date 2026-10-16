@@ -1,0 +1,18 @@
+# Cloudflare Pages 配置 — 绑定 D1（内容数据库）与 R2（图片/音频存储）。
+# 本地开发（astro dev + platformProxy）自动使用本地模拟的 D1/R2，无需真实 ID。
+# 部署前需执行：
+#   npx wrangler d1 create flowerdeer           → 把返回的 database_id 填到下面
+#   npx wrangler r2 bucket create flowerdeer-media
+name = "flowerdeer"
+compatibility_date = "2026-10-15"
+compatibility_flags = ["nodejs_compat"]
+pages_build_output_dir = "dist"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "flowerdeer"
+database_id = "bc6fd1c1-3d66-410f-88cc-31b77caadcdd"
+
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "flowerdeer-media"

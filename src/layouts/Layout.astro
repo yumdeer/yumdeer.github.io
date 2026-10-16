@@ -1,9 +1,10 @@
 ---
 // ────────────────────────────────────────────────────────────────────────────
-//  全站布局 — 左侧固定边栏（站名 / 项目导航 / 博客 / 关于）+ 右侧内容区。
-//  参照 yundongshu.com 的极简结构。导航数据来自 src/data/projects.ts。
+//  全站布局 — 左侧固定边栏（站名 / 项目导航 / 随笔 / 关于）+ 右侧内容区。
+//  SSR 模式：项目导航来自 D1 数据库（管理后台改完即全站生效）。
+//  侧栏底部播放器：D1 曲目（真实音乐）+ Web Audio 合成环境音并存。
 // ────────────────────────────────────────────────────────────────────────────
-import { getProjectMetas } from '../lib/projects';
+import { getDB, listProjects } from '../lib/db';
 import { site } from '../config';
 import { ClientRouter } from 'astro:transitions';
 import '../styles/global.css';
@@ -18,8 +19,13 @@ interface Props {
 const { title, description = site.description, activePath = '', theme = 'light' } = Astro.props;
 const pageTitle = title ? `${title} — ${site.name}` : `${site.name} · ${site.title}`;
 
-// 按分类分组项目（元数据来自各项目文件夹的 meta.json）
-const projects = getProjectMetas();
+// 按分类分组项目（元数据来自 D1）
+let projects: Awaited<ReturnType<typeof listProjects>> = [];
+try {
+  projects = await listProjects(getDB());
+} catch {
+  // 数据库未初始化时（首次 setup 前）侧栏留空
+}
 const categories = [...new Set(projects.map((p) => p.category))];
 const grouped = categories.map((cat) => ({
   category: cat,
@@ -34,12 +40,12 @@ const grouped = categories.map((cat) => ({
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{pageTitle}</title>
     <meta name="description" content={description} />
-    <link rel="icon" type="image/png" href="/favicon.png" />
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" href="/favicon.png?v=2" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2" />
     <meta property="og:title" content={pageTitle} />
     <meta property="og:description" content={description} />
     <meta property="og:type" content="website" />
-    <meta property="og:image" content="/og.jpg" />
+    <meta property="og:image" content={new URL('/og.jpg', Astro.site).href} />
     <ClientRouter />
   </head>
   <body class={theme === 'dark' ? 'theme-dark' : ''}>
@@ -79,6 +85,24 @@ const grouped = categories.map((cat) => ({
           </ul>
         </nav>
 
+        <div class="ambient">
+          <button class="ambient-toggle" type="button" aria-expanded="false">播放器</button>
+          <div class="ambient-panel" hidden>
+            <p class="ambient-sec-label">音乐</p>
+            <ul class="ambient-sounds" id="track-list"><li class="ambient-empty">加载中…</li></ul>
+            <p class="ambient-sec-label">环境音</p>
+            <ul class="ambient-sounds">
+              <li><button type="button" data-sound="rain">雨声</button></li>
+              <li><button type="button" data-sound="waves">海浪</button></li>
+              <li><button type="button" data-sound="white">白噪声</button></li>
+              <li><button type="button" data-sound="brown">棕噪声</button></li>
+            </ul>
+            <label class="ambient-volume">音量
+              <input type="range" min="0" max="1" step="0.01" value="0.5" />
+            </label>
+          </div>
+        </div>
+
         <div class="sidebar-footer">© {new Date().getFullYear()} {site.name}</div>
       </aside>
 
@@ -88,6 +112,23 @@ const grouped = categories.map((cat) => ({
     </div>
 
     <script>
+      // 彩蛋：连点中文名「张鹿溪 · Photographer」小字 6 次（点击间隔 ≤0.5s）
+      // → 进入管理后台。document 级委托，SPA 导航不重载；该行非链接，
+      // 点击无默认行为，不影响正常浏览。
+      let zhTaps = 0;
+      let zhTapTimer: ReturnType<typeof setTimeout> | undefined;
+      document.addEventListener('click', (e) => {
+        if (!(e.target as HTMLElement).closest('.site-subtitle')) return;
+        zhTaps++;
+        if (zhTapTimer) clearTimeout(zhTapTimer);
+        if (zhTaps >= 6) {
+          zhTaps = 0;
+          location.assign('/admin/');
+          return;
+        }
+        zhTapTimer = setTimeout(() => (zhTaps = 0), 500);
+      });
+
       // 移动端侧栏抽屉（ClientRouter 下每次导航后需重新绑定）
       const initMenu = () => {
         const toggle = document.querySelector('.menu-toggle') as HTMLElement | null;
@@ -106,6 +147,301 @@ const grouped = categories.map((cat) => ({
         );
       };
       document.addEventListener('astro:page-load', initMenu);
+    </script>
+
+    <script>
+      // ── 播放器：真实曲目（<audio>，D1/R2）+ 合成环境音（Web Audio）并存 ──
+      // 音乐与环境音独立控制：音乐走 audio 元素，环境音走 AudioContext，
+      // 音量滑杆同时控制两者（环境音停播音乐不受影响，反之亦然）。
+      const LABELS: Record<string, string> = { rain: '雨声', waves: '海浪', white: '白噪声', brown: '棕噪声' };
+
+      const engine = {
+        ctx: null as AudioContext | null,
+        master: null as GainNode | null,
+        sources: [] as AudioBufferSourceNode[],
+        oscillators: [] as OscillatorNode[],
+        buffers: {} as Record<string, AudioBuffer>,
+        current: null as string | null,
+        volume: 0.5,
+        gen: 0,
+
+        ensure() {
+          if (!this.ctx) {
+            this.ctx = new AudioContext();
+            this.master = this.ctx.createGain();
+            this.master.gain.value = 0;
+            this.master.connect(this.ctx.destination);
+          }
+          if (this.ctx.state === 'suspended') void this.ctx.resume();
+        },
+
+        seamless(buf: AudioBuffer) {
+          const N = 2048;
+          for (let ch = 0; ch < buf.numberOfChannels; ch++) {
+            const d = buf.getChannelData(ch);
+            const len = d.length;
+            const drift = d[len - 1] - d[0];
+            for (let i = 0; i < len; i++) d[i] -= (drift * i) / len;
+            for (let i = 0; i < N; i++) {
+              const f = i / N;
+              d[i] = d[i] * f + d[len - N + i] * (1 - f);
+            }
+          }
+        },
+
+        buffer(type: 'white' | 'pink' | 'brown') {
+          if (this.buffers[type]) return this.buffers[type];
+          const ctx = this.ctx!;
+          const len = ctx.sampleRate * 4;
+          const buf = ctx.createBuffer(2, len, ctx.sampleRate);
+          for (let ch = 0; ch < 2; ch++) {
+            const d = buf.getChannelData(ch);
+            let last = 0, b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+            for (let i = 0; i < len; i++) {
+              const w = Math.random() * 2 - 1;
+              if (type === 'white') d[i] = w;
+              else if (type === 'brown') { last = (last + 0.02 * w) / 1.02; d[i] = last * 3.5; }
+              else {
+                b0 = 0.99886 * b0 + w * 0.0555179; b1 = 0.99332 * b1 + w * 0.0750759;
+                b2 = 0.969 * b2 + w * 0.153852;   b3 = 0.8665 * b3 + w * 0.3104856;
+                b4 = 0.55 * b4 + w * 0.5329522;   b5 = -0.7616 * b5 - w * 0.016898;
+                d[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362) * 0.11;
+                b6 = w * 0.115926;
+              }
+            }
+          }
+          this.seamless(buf);
+          this.buffers[type] = buf;
+          return buf;
+        },
+
+        clear() {
+          this.sources.forEach((s) => { try { s.stop(); s.disconnect(); } catch {} });
+          this.oscillators.forEach((o) => { try { o.stop(); o.disconnect(); } catch {} });
+          this.sources = [];
+          this.oscillators = [];
+        },
+
+        fade(to: number, secs: number) {
+          const t = this.ctx!.currentTime;
+          const g = this.master!.gain;
+          g.cancelScheduledValues(t);
+          g.setValueAtTime(g.value, t);
+          g.linearRampToValueAtTime(to, t + secs);
+        },
+
+        start(name: string) {
+          this.ensure();
+          this.gen++;
+          this.clear();
+          const ctx = this.ctx!;
+          const master = this.master!;
+          master.gain.cancelScheduledValues(ctx.currentTime);
+          master.gain.value = 0;
+
+          const src = ctx.createBufferSource();
+          src.loop = true;
+
+          if (name === 'rain') {
+            src.buffer = this.buffer('white');
+            const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 400;
+            const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 7000;
+            const g = ctx.createGain(); g.gain.value = 0.5;
+            src.connect(hp); hp.connect(lp); lp.connect(g); g.connect(master);
+          } else if (name === 'waves') {
+            src.buffer = this.buffer('brown');
+            const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 480; lp.Q.value = 0.7;
+            const g = ctx.createGain(); g.gain.value = 0.55;
+            const lfo = ctx.createOscillator(); lfo.frequency.value = 0.07;
+            const lfoG = ctx.createGain(); lfoG.gain.value = 0.35;
+            lfo.connect(lfoG); lfoG.connect(g.gain);
+            const lfo2 = ctx.createOscillator(); lfo2.frequency.value = 0.045;
+            const lfo2G = ctx.createGain(); lfo2G.gain.value = 260;
+            lfo2.connect(lfo2G); lfo2G.connect(lp.frequency);
+            src.connect(lp); lp.connect(g); g.connect(master);
+            lfo.start(); lfo2.start();
+            this.oscillators.push(lfo, lfo2);
+          } else if (name === 'white') {
+            src.buffer = this.buffer('white');
+            const g = ctx.createGain(); g.gain.value = 0.18;
+            src.connect(g); g.connect(master);
+          } else {
+            src.buffer = this.buffer('brown');
+            const g = ctx.createGain(); g.gain.value = 0.7;
+            src.connect(g); g.connect(master);
+          }
+
+          src.start();
+          this.sources.push(src);
+          this.current = name;
+          this.fade(this.volume * this.volume, 1.2);
+        },
+
+        stop() {
+          if (!this.ctx || !this.current) return;
+          this.current = null;
+          this.gen++;
+          const gen = this.gen;
+          this.fade(0, 0.6);
+          setTimeout(() => { if (this.gen === gen) this.clear(); }, 700);
+        },
+
+        setVolume(v: number) {
+          this.volume = v;
+          if (this.ctx && this.current) {
+            this.master!.gain.setTargetAtTime(v * v, this.ctx.currentTime, 0.05);
+          }
+        },
+      };
+
+      (window as any).__ambient = engine; // 调试/验证入口
+
+      // 音乐播放器（模块级单例，切页持续播放）
+      const player = {
+        audio: null as HTMLAudioElement | null,
+        current: null as string | null,
+        tracks: [] as { slug: string; title: string; artist: string; url: string }[],
+        loaded: false,
+
+        ensure(): HTMLAudioElement {
+          if (!this.audio) {
+            this.audio = new Audio();
+            this.audio.volume = 0.5;
+          }
+          return this.audio;
+        },
+
+        async load() {
+          if (this.loaded) return;
+          try {
+            const res = await fetch('/api/tracks');
+            this.tracks = res.ok ? await res.json() : [];
+          } catch {
+            this.tracks = [];
+          }
+          this.loaded = true;
+        },
+
+        play(slug: string, url: string) {
+          const a = this.ensure();
+          if (this.current === slug && !a.paused) {
+            a.pause();
+            this.current = null;
+          } else {
+            a.src = url;
+            void a.play();
+            this.current = slug;
+          }
+        },
+
+        stop() {
+          if (this.audio) this.audio.pause();
+          this.current = null;
+        },
+
+        setVolume(v: number) {
+          if (this.audio) this.audio.volume = v;
+        },
+      };
+
+      (window as any).__player = player;
+
+      const fmtTime = (s: number) =>
+        s > 0 ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}` : '';
+
+      const renderTracks = () => {
+        const list = document.getElementById('track-list');
+        if (!list) return;
+        if (player.tracks.length === 0) {
+          list.innerHTML = '<li class="ambient-empty">暂无曲目</li>';
+          return;
+        }
+        list.innerHTML = '';
+        for (const t of player.tracks) {
+          const li = document.createElement('li');
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.dataset.track = t.slug;
+          btn.textContent = t.artist ? `${t.title} · ${t.artist}` : t.title;
+          const dur = fmtTime(
+            (player.tracks.find((x) => x.slug === t.slug) as any).duration ?? 0,
+          );
+          if (dur) btn.textContent += ` (${dur})`;
+          btn.addEventListener('click', () => {
+            player.play(t.slug, t.url);
+            syncPanel();
+          });
+          li.appendChild(btn);
+          list.appendChild(li);
+        }
+        // 播放中曲目标记（audio ended 后自动清除）
+        player.ensure().onended = () => { player.current = null; syncPanel(); };
+      };
+
+      const syncPanel = () => {
+        document.querySelectorAll<HTMLButtonElement>('button[data-sound]').forEach((b) => {
+          b.classList.toggle('playing', b.dataset.sound === engine.current);
+        });
+        document.querySelectorAll<HTMLButtonElement>('button[data-track]').forEach((b) => {
+          b.classList.toggle('playing', b.dataset.track === player.current);
+        });
+        const playing = player.current
+          ? `♪ ${player.tracks.find((t) => t.slug === player.current)?.title ?? ''}`
+          : engine.current
+            ? `♪ ${LABELS[engine.current]}`
+            : '播放器';
+        const toggle = document.querySelector('.ambient-toggle');
+        if (toggle) {
+          toggle.textContent = playing;
+          toggle.classList.toggle('on', !!(player.current || engine.current));
+        }
+      };
+
+      const initAmbient = async () => {
+        const toggle = document.querySelector('.ambient-toggle') as HTMLElement | null;
+        const panel = document.querySelector('.ambient-panel') as HTMLElement | null;
+        const vol = document.querySelector('.ambient-volume input') as HTMLInputElement | null;
+        if (!toggle || !panel) return;
+
+        toggle.addEventListener('click', (e) => {
+          e.stopPropagation();
+          panel.hidden = !panel.hidden;
+          toggle.setAttribute('aria-expanded', String(!panel.hidden));
+          if (!panel.hidden && !player.loaded) {
+            void player.load().then(renderTracks);
+          }
+        });
+
+        panel.querySelectorAll<HTMLButtonElement>('button[data-sound]').forEach((b) => {
+          b.addEventListener('click', () => {
+            if (engine.current === b.dataset.sound) engine.stop();
+            else engine.start(b.dataset.sound!);
+            syncPanel();
+          });
+        });
+
+        if (vol) {
+          vol.value = String(engine.volume);
+          vol.addEventListener('input', () => {
+            engine.setVolume(Number(vol.value));
+            player.setVolume(Number(vol.value));
+          });
+        }
+
+        if (player.loaded) renderTracks();
+        syncPanel();
+      };
+
+      document.addEventListener('astro:page-load', () => void initAmbient());
+
+      // 点击面板外关闭（document 级监听只绑一次，DOM 引用回调内实时查询）
+      document.addEventListener('click', (e) => {
+        const panel = document.querySelector('.ambient-panel');
+        if (panel && !panel.hidden && !(e.target as HTMLElement).closest('.ambient')) {
+          panel.hidden = true;
+          document.querySelector('.ambient-toggle')?.setAttribute('aria-expanded', 'false');
+        }
+      });
     </script>
   </body>
 </html>

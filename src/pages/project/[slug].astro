@@ -1,23 +1,42 @@
 ---
-// 项目页 — 幻灯片逐张浏览（键盘 / 点击 / 滑动）。
+// 项目页 — 幻灯片逐张浏览（键盘 / 点击 / 滑动）。SSR：照片来自 D1 + R2。
 import Layout from '../../layouts/Layout.astro';
 import Slideshow from '../../components/Slideshow.astro';
-import { getProjects } from '../../lib/projects';
+import { getDB, getProject, listPhotos, r2Key } from '../../lib/db';
+import { SLIDE_SIZES } from '../../lib/photo-sizes';
 
-export async function getStaticPaths() {
-  const projects = await getProjects();
-  return projects.map((p) => ({
-    params: { slug: p.slug },
-    props: { project: p },
-  }));
+const { slug } = Astro.params;
+let project: Awaited<ReturnType<typeof getProject>> = undefined;
+let photos: Awaited<ReturnType<typeof listPhotos>> = [];
+
+try {
+  const db = getDB();
+  project = slug ? await getProject(db, slug) : undefined;
+  if (project) photos = await listPhotos(db, project.id);
+} catch {
+  // DB 未初始化
 }
 
-const { project } = Astro.props;
+if (!project) {
+  return Astro.redirect('/404');
+}
+
+const slides = photos.map((p) => ({
+  src: `/api/media/${r2Key.photoFull(project!.slug, p.slug)}`,
+  srcset:
+    `/api/media/${r2Key.photoThumb(project!.slug, p.slug)} 800w, ` +
+    `/api/media/${r2Key.photoFull(project!.slug, p.slug)} 2400w`,
+  sizes: SLIDE_SIZES,
+  w: p.w,
+  h: p.h,
+  alt: p.title || 'Photograph',
+  blur: p.blur,
+}));
 ---
 
 <Layout
   title={project.title}
-  description={project.description}
+  description={project.description ?? undefined}
   activePath={`/project/${project.slug}/`}
 >
   <div class="project-page">
@@ -25,6 +44,6 @@ const { project } = Astro.props;
       <h1>{project.title}{project.year ? ` ${project.year}` : ''}</h1>
       {project.description && <p class="project-desc">{project.description}</p>}
     </div>
-    <Slideshow photos={project.photos} title={project.title} />
+    <Slideshow photos={slides} title={project.title} />
   </div>
 </Layout>
