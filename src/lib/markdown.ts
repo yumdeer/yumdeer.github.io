@@ -43,14 +43,20 @@ export function parseMarkdown(raw: string): ParsedArticle {
 }
 
 // 渲染为 HTML。链接加 target=_blank + noopener（外链安全）。
+// 注意 marked v13+ 的 renderer.link 签名是 token 对象（此前是位置参数，
+// 升级 marked 后旧写法会把 token 对象拼进 href，渲染出 [object Object]）。
 export function renderMarkdown(md: string): string {
   const renderer = new marked.Renderer();
-  const origLink = renderer.link.bind(renderer);
-  renderer.link = (href: string | null, title: string | null, text: string) => {
-    const external = /^https?:\/\//.test(href ?? '');
+  renderer.link = function (token) {
+    const href = token.href ?? '#';
+    const external = /^(https?:)?\/\//.test(href);
     const attrs = external ? ' target="_blank" rel="noopener noreferrer"' : '';
-    const t = title ? ` title="${title}"` : '';
-    return `<a href="${href ?? '#'}"${t}${attrs}>${text}</a>`;
+    const title = token.title ? ` title="${token.title}"` : '';
+    // 图片链接（[![alt](img)](url)）等内联子节点需递归渲染
+    const text = token.tokens?.length
+      ? this.parser.parseInline(token.tokens)
+      : token.text;
+    return `<a href="${href}"${title}${attrs}>${text}</a>`;
   };
   marked.use({ renderer, gfm: true, breaks: false });
   return marked.parse(md, { async: false }) as string;
