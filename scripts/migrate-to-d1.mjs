@@ -17,7 +17,15 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { getPlatformProxy } from 'wrangler';
 import sharp from 'sharp';
-import matter from 'gray-matter';
+import { parse as parseYaml } from 'yaml';
+
+// 切分 `---` frontmatter（与 src/lib/markdown.ts 的 splitFrontmatter 保持一致；
+// 脚本为 node 直跑的 .mjs，无法 import TS 源码，故在此内联）
+const splitFrontmatter = (raw) => {
+  const m = raw.match(/^---\r?\n(?:([\s\S]*?)\r?\n)?---(?:\r?\n|$)/);
+  if (!m) return { data: {}, content: raw };
+  return { data: parseYaml(m[1] ?? '') ?? {}, content: raw.slice(m[0].length) };
+};
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ASSETS_DIR = path.join(ROOT, 'src/assets/projects');
@@ -131,7 +139,7 @@ async function migrateArticles(env) {
       const slug = path.basename(file, path.extname(file));
       const full = path.join(dir, file);
       const raw = await readFile(full, 'utf8');
-      const { data, content } = matter(raw);
+      const { data, content } = splitFrontmatter(raw);
       const body = file.endsWith('.mdx') ? mdxToMarkdown(content.trim()) : content.trim();
       const st = await stat(full);
       const pubDate =

@@ -1,9 +1,11 @@
 // ────────────────────────────────────────────────────────────────────────────
 //  Markdown 渲染（文章存 D1，marked 渲染，不再走构建期 content 集合）。
-//  支持 frontmatter（gray-matter）— 管理后台粘贴带 frontmatter 的旧文也能解析。
+//  支持 frontmatter — 管理后台粘贴带 frontmatter 的旧文也能解析。
+//  frontmatter 切分手写（原 gray-matter 依赖链含 sprintf-js 漏洞，已移除），
+//  YAML 解析用零依赖的 yaml 包。
 // ────────────────────────────────────────────────────────────────────────────
 import { marked } from 'marked';
-import matter from 'gray-matter';
+import { parse as parseYaml } from 'yaml';
 
 export interface ParsedArticle {
   title?: string;
@@ -15,9 +17,19 @@ export interface ParsedArticle {
   body: string;
 }
 
+// 切分 `---` 包裹的 YAML frontmatter（格式兼容 gray-matter）。
+// 无 frontmatter 时返回空对象和原文；YAML 语法错误时抛出（与 gray-matter 一致）。
+export function splitFrontmatter(raw: string): { data: Record<string, unknown>; content: string } {
+  // 体部可选：兼容空 frontmatter（---\n---\n）
+  const m = raw.match(/^---\r?\n(?:([\s\S]*?)\r?\n)?---(?:\r?\n|$)/);
+  if (!m) return { data: {}, content: raw };
+  const data = (parseYaml(m[1] ?? '') ?? {}) as Record<string, unknown>;
+  return { data, content: raw.slice(m[0].length) };
+}
+
 // 解析带 frontmatter 的 Markdown（管理后台导入旧文 / publish 脚本迁移用）
 export function parseMarkdown(raw: string): ParsedArticle {
-  const { data, content } = matter(raw);
+  const { data, content } = splitFrontmatter(raw);
   return {
     title: typeof data.title === 'string' ? data.title : undefined,
     description: typeof data.description === 'string' ? data.description : undefined,
