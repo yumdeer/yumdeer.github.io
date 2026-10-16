@@ -145,4 +145,7 @@ export const r2Key = {
   photoFull: (projectSlug: string, photoSlug: string) => `img/${projectSlug}/${photoSlug}/full.webp`,
   photoThumb: (projectSlug: string, photoSlug: string) => `img/${projectSlug}/${photoSlug}/thumb.webp`,
   audio: (slug: string) => `audio/${slug}.mp3`,
+  // 文章内嵌媒体（不进 photos/tracks 表，只在正文中引用）
+  articleImage: (name: string) => `img/article/${name}.webp`,
+  articleAudio: (name: string) => `audio/article/${name}.mp3`,
 };

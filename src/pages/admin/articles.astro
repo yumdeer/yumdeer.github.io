@@ -1,5 +1,7 @@
 ---
-// /admin/articles — 文章管理：列表 + 新建/编辑（Markdown 编辑器，支持粘贴带 frontmatter 的旧文）
+// /admin/articles — 文章管理：列表 + 新建/编辑（Markdown 编辑器）
+// 编辑器支持：图片直接上传（选文件/拖拽/粘贴 → 压缩 webp → R2，插入 Markdown）、
+// 音乐插入（网易云外链播放器 / 上传 MP3）、自定义分类、粘贴带 frontmatter 的旧文自动解析。
 import AdminLayout from '../../layouts/AdminLayout.astro';
 import { getDB, listArticles } from '../../lib/db';
 
@@ -7,6 +9,17 @@ let articles: Awaited<ReturnType<typeof listArticles>> = [];
 try {
   articles = await listArticles(getDB(), { includeDrafts: true });
 } catch {}
+
+// 分类选项：内置两个 + 数据库已有分类（用户可输入新值，保存后自动出现在选项里）
+const collLabel: Record<string, string> = { photography: '摄影随笔', tech: '技术' };
+const collections = [
+  ...new Map(
+    articles
+      .map((a) => a.collection)
+      .concat(['photography', 'tech'])
+      .map((c) => [c, collLabel[c] ?? c]),
+  ).entries(),
+];
 ---
 
 <AdminLayout title="文章">
@@ -19,7 +32,7 @@ try {
         <li>
           <button class="btn-open" type="button" data-slug={a.slug}>
             {a.draft ? '[草稿] ' : ''}{a.title}
-            <span class="a-meta">{a.collection === 'photography' ? '摄影' : '技术'} · {a.pub_date}</span>
+            <span class="a-meta">{collLabel[a.collection] ?? a.collection} · {a.pub_date}</span>
           </button>
           <button class="btn-danger btn-del" type="button" data-slug={a.slug}>删</button>
         </li>
@@ -30,19 +43,39 @@ try {
       <div class="admin-row-form">
         <label>标题 <input name="title" required /></label>
         <label>分类
-          <select name="collection">
-            <option value="photography">摄影随笔</option>
-            <option value="tech">技术</option>
-          </select>
+          <input name="collection" list="coll-list" placeholder="选择或输入新分类" required />
+          <datalist id="coll-list">
+            {collections.map(([value, text]) => <option value={value}>{text}</option>)}
+          </datalist>
         </label>
         <label>发布日期 <input name="pubDate" type="date" /></label>
         <label>简介 <input name="description" placeholder="一两句话（可选）" /></label>
         <label class="chk"><input type="checkbox" name="draft" /> 草稿（不公开）</label>
       </div>
       <div class="admin-row-form">
-        <label>封面图 URL（可选） <input name="coverUrl" placeholder="/api/media/… 或 https://…" /></label>
+        <label>封面图（可选）
+          <span class="cover-field">
+            <input name="coverUrl" placeholder="上传或粘贴 /api/media/… 链接" />
+            <button type="button" class="editor-tool-btn" id="cover-upload">上传封面</button>
+          </span>
+        </label>
         <label>封面 alt <input name="coverAlt" /></label>
       </div>
+
+      <div class="editor-toolbar" id="editor-toolbar">
+        <button type="button" class="editor-tool-btn" id="btn-insert-image">插入图片</button>
+        <button type="button" class="editor-tool-btn" id="btn-insert-music">插入音乐</button>
+        <span class="editor-toolbar-hint">支持拖拽 / 粘贴图片直接上传</span>
+        <input type="file" id="file-images" accept="image/*" multiple hidden />
+        <input type="file" id="file-audio" accept="audio/mpeg,.mp3" hidden />
+        <div class="music-popover" id="music-popover" hidden>
+          <label>网易云歌曲 ID <input id="netease-id" inputmode="numeric" placeholder="如 521264673" /></label>
+          <button type="button" class="editor-tool-btn" id="netease-insert">插入播放器</button>
+          <span class="music-popover-sep">或</span>
+          <button type="button" class="editor-tool-btn" id="audio-upload-btn">上传 MP3</button>
+        </div>
+      </div>
+
       <textarea name="bodyMd" rows="20" placeholder="Markdown 正文。也可直接粘贴带 frontmatter（--- title: … ---）的旧文，勾选下方选项自动解析。"></textarea>
       <label class="chk"><input type="checkbox" name="parseFrontmatter" /> 粘贴的是含 frontmatter 的完整旧文（自动提取 title/日期等）</label>
       <div class="admin-editor-actions">
@@ -58,10 +91,145 @@ try {
   const editor = document.getElementById('editor') as HTMLFormElement;
   const msg = editor.querySelector('[data-msg]')!;
   const previewLink = editor.querySelector('#preview-link') as HTMLAnchorElement;
+  const bodyMd = editor.elements.namedItem('bodyMd') as HTMLTextAreaElement;
   const v = (n: string) => editor.elements.namedItem(n) as HTMLInputElement;
   let currentSlug = '';
 
-  // 打开（编辑）
+  const flash = (text: string) => {
+    msg.textContent = text;
+    setTimeout(() => (msg.textContent = ''), 2000);
+  };
+
+  // ── 光标处插入文本 ──────────────────────────────────────────────
+  function insertAtCursor(text: string) {
+    const start = bodyMd.selectionStart ?? bodyMd.value.length;
+    const end = bodyMd.selectionEnd ?? start;
+    bodyMd.value = bodyMd.value.slice(0, start) + text + bodyMd.value.slice(end);
+    const pos = start + text.length;
+    bodyMd.focus();
+    bodyMd.setSelectionRange(pos, pos);
+  }
+
+  // ── 图片上传：canvas 压缩 webp → R2 → Markdown（与照片管理同压缩策略） ──
+  async function uploadImage(file: File): Promise<string | null> {
+    const bmp = await createImageBitmap(file).catch(() => null);
+    if (!bmp) { flash('无法读取该图片'); return null; }
+    const MAX = 1600;
+    const scale = Math.min(1, MAX / Math.max(bmp.width, bmp.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(bmp.width * scale);
+    canvas.height = Math.round(bmp.height * scale);
+    canvas.getContext('2d')!.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    const b64 = canvas.toDataURL('image/webp', 0.82);
+    if (b64.length > 10 * 1024 * 1024) { flash('图片过大（压缩后仍超 10MB）'); return null; }
+
+    const r = await fetch('/api/admin/article-media', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'image', name: file.name, b64 }),
+    });
+    const data = await r.json();
+    if (!r.ok) { flash(data.error || '上传失败'); return null; }
+    return data.url as string;
+  }
+
+  async function insertImages(files: File[]) {
+    const imgs = files.filter((f) => f.type.startsWith('image/'));
+    if (!imgs.length) return;
+    flash(`上传中（0/${imgs.length}）…`);
+    let done = 0;
+    for (const f of imgs) {
+      const url = await uploadImage(f);
+      if (url) insertAtCursor(`\n\n![](${url})\n`);
+      flash(`上传中（${++done}/${imgs.length}）…`);
+    }
+    flash('图片已插入 ✓');
+  }
+
+  // ── 音频上传：mp3 base64 → R2 → <audio> ────────────────────────
+  async function uploadAudio(file: File) {
+    if (file.size > 15 * 1024 * 1024) { flash('音频超过 15MB，请压缩后再传'); return; }
+    flash('音频上传中…');
+    const b64 = await new Promise<string>((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(fr.result as string);
+      fr.onerror = reject;
+      fr.readAsDataURL(file);
+    });
+    const r = await fetch('/api/admin/article-media', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'audio', name: file.name, b64 }),
+    });
+    const data = await r.json();
+    if (!r.ok) { flash(data.error || '上传失败'); return; }
+    insertAtCursor(`\n\n<audio controls preload="none" src="${data.url}"></audio>\n`);
+    flash('音频已插入 ✓');
+  }
+
+  // ── 工具栏绑定 ──────────────────────────────────────────────────
+  const $ = (id: string) => document.getElementById(id)!;
+  $('btn-insert-image').addEventListener('click', () => $('file-images').click());
+  $('file-images').addEventListener('change', async (e) => {
+    await insertImages([...(e.target as HTMLInputElement).files!]);
+    (e.target as HTMLInputElement).value = '';
+  });
+
+  const popover = $('music-popover');
+  $('btn-insert-music').addEventListener('click', (e) => {
+    e.stopPropagation();
+    popover.hidden = !popover.hidden;
+  });
+  popover.addEventListener('click', (e) => e.stopPropagation());
+  $('netease-insert').addEventListener('click', () => {
+    const id = ($('netease-id') as HTMLInputElement).value.trim();
+    if (!/^\d+$/.test(id)) { flash('请输入纯数字的歌曲 ID'); return; }
+    insertAtCursor(
+      `\n\n<iframe frameborder="no" border="0" marginwidth="0" marginheight="0" width="330" height="86" src="//music.163.com/outchain/player?type=2&id=${id}&auto=0&height=66"></iframe>\n`,
+    );
+    popover.hidden = true;
+    ($('netease-id') as HTMLInputElement).value = '';
+  });
+  $('audio-upload-btn').addEventListener('click', () => {
+    popover.hidden = true;
+    $('file-audio').click();
+  });
+  $('file-audio').addEventListener('change', async (e) => {
+    const f = (e.target as HTMLInputElement).files?.[0];
+    if (f) await uploadAudio(f);
+    (e.target as HTMLInputElement).value = '';
+  });
+  document.addEventListener('click', () => (popover.hidden = true));
+
+  // 封面上传（成功后填入封面 URL 字段而非正文）
+  $('cover-upload').addEventListener('click', () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = async () => {
+      const f = input.files?.[0];
+      if (!f) return;
+      const url = await uploadImage(f);
+      if (url) { v('coverUrl').value = url; flash('封面上传完成 ✓'); }
+    };
+    input.click();
+  });
+
+  // ── 拖拽 / 粘贴图片直接上传 ─────────────────────────────────────
+  bodyMd.addEventListener('dragover', (e) => e.preventDefault());
+  bodyMd.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    await insertImages([...e.dataTransfer!.files]);
+  });
+  bodyMd.addEventListener('paste', async (e) => {
+    const files = [...(e.clipboardData?.files ?? [])];
+    if (files.length) {
+      e.preventDefault(); // 有文件时不粘贴文件名占位文本
+      await insertImages(files);
+    }
+  });
+
+  // ── 列表交互（打开/新建/删除） ─────────────────────────────────
   document.getElementById('article-list')?.addEventListener('click', async (e) => {
     const btn = e.target as HTMLElement;
 
@@ -83,13 +251,13 @@ try {
       currentSlug = slug;
       editor.dataset.slug = slug;
       v('title').value = a.title;
-      (editor.elements.namedItem('collection') as HTMLSelectElement).value = a.collection;
+      v('collection').value = a.collection;
       v('pubDate').value = a.pub_date;
       v('description').value = a.description ?? '';
       v('coverUrl').value = a.cover_url ?? '';
       v('coverAlt').value = a.cover_alt ?? '';
       v('draft').checked = !!a.draft;
-      (editor.elements.namedItem('bodyMd') as HTMLTextAreaElement).value = a.body_md;
+      bodyMd.value = a.body_md;
       v('parseFrontmatter').checked = false;
       previewLink.hidden = false;
       previewLink.href = `/blog/${a.collection}/${a.slug}/`;
@@ -103,7 +271,7 @@ try {
     }
   });
 
-  // 保存（新建或更新）
+  // ── 保存（新建或更新） ──────────────────────────────────────────
   editor.addEventListener('submit', async (e) => {
     e.preventDefault();
     msg.textContent = '保存中…';
@@ -113,13 +281,13 @@ try {
       body: JSON.stringify({
         slug: currentSlug || undefined,
         title: v('title').value,
-        collection: (editor.elements.namedItem('collection') as HTMLSelectElement).value,
+        collection: v('collection').value.trim(),
         pubDate: v('pubDate').value || undefined,
         description: v('description').value || undefined,
         coverUrl: v('coverUrl').value || undefined,
         coverAlt: v('coverAlt').value || undefined,
         draft: v('draft').checked,
-        bodyMd: (editor.elements.namedItem('bodyMd') as HTMLTextAreaElement).value,
+        bodyMd: bodyMd.value,
         parseFrontmatter: v('parseFrontmatter').checked,
       }),
     });

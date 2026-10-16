@@ -611,6 +611,17 @@ img {
   margin: 1.5em 0;
 }
 
+/* 文章内嵌音频（管理后台上传 MP3 插入）与网易云 iframe */
+.article .prose audio {
+  width: 100%;
+  margin: 1.5em 0;
+}
+
+.article .prose iframe {
+  display: block;
+  margin: 1.5em auto;
+}
+
 .article .prose a {
   text-decoration: underline;
   text-underline-offset: 3px;

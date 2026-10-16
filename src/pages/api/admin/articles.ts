@@ -15,7 +15,10 @@ export const POST: APIRoute = async ({ request, locals }) => {
   const body = await request.json().catch(() => null);
   if (!body?.title) return Response.json({ error: '标题必填' }, { status: 400 });
 
-  const collection = body.collection === 'tech' ? 'tech' : 'photography';
+  // 分类：内置 photography/tech 保留（兼容旧数据与路由），也允许自定义（如"生活"）
+  const collection = ['photography', 'tech'].includes(body.collection)
+    ? body.collection
+    : String(body.collection ?? 'photography').trim().slice(0, 20) || 'photography';
 
   // 粘贴整篇带 frontmatter 的 Markdown（可包含 title 等元数据）
   let title = String(body.title);
@@ -51,8 +54,8 @@ export const POST: APIRoute = async ({ request, locals }) => {
     return Response.json({ ok: true, slug: body.slug });
   }
 
-  // 新建：slug 由标题生成（英文），中文标题退化为 article-N
-  let slug: string = String(title).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
+  // 新建：slug 由标题生成（保留中文字符——hexo 迁移文章的中文 slug 路由已验证可行）
+  let slug: string = String(title).toLowerCase().replace(/[^a-z0-9-\u4e00-\u9fff]+/g, '-').replace(/^-+|-+$/g, '');
   if (!slug) {
     const r = await db.prepare('SELECT COUNT(*) AS n FROM articles').first<{ n: number }>();
     slug = `article-${(r?.n ?? 0) + 1}`;
