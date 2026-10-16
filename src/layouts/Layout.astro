@@ -130,6 +130,27 @@ const grouped = categories.map((cat) => ({
         zhTapTimer = setTimeout(() => (zhTaps = 0), 500);
       });
 
+      // 崩溃欺骗（hexo 老站彩蛋，crash_cheat.js 移植）：切走标签页标题变
+      // "🌙你应该是一场梦"，切回来闪现"☀我应该是一阵风"2 秒后恢复。
+      // ClientRouter 导航会换标题，astro:page-load 时同步刷新基准。
+      let originTitle = document.title;
+      let titleTimer: ReturnType<typeof setTimeout> | undefined;
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+          document.title = '🌙你应该是一场梦';
+          if (titleTimer) clearTimeout(titleTimer);
+        } else {
+          document.title = '☀我应该是一阵风' + originTitle;
+          titleTimer = setTimeout(() => (document.title = originTitle), 2000);
+        }
+      });
+      document.addEventListener('astro:page-load', () => {
+        // 彩弹展示中不刷新基准（避免把彩蛋文案固化成页面标题）
+        if (!document.title.startsWith('☀') && !document.title.startsWith('🌙')) {
+          originTitle = document.title;
+        }
+      });
+
       // 移动端侧栏抽屉（ClientRouter 下每次导航后需重新绑定）
       const initMenu = () => {
         const toggle = document.querySelector('.menu-toggle') as HTMLElement | null;
