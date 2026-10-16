@@ -1,18 +1,30 @@
-# Cloudflare Pages 配置 — 绑定 D1（内容数据库）与 R2（图片/音频存储）。
-# 本地开发（astro dev + platformProxy）自动使用本地模拟的 D1/R2，无需真实 ID。
-# 部署前需执行：
-#   npx wrangler d1 create flowerdeer           → 把返回的 database_id 填到下面
-#   npx wrangler r2 bucket create flowerdeer-media
+# Cloudflare Workers 部署配置（@astrojs/cloudflare v14 仅支持 Workers，
+# 不再生成 Pages 的 _worker.js — Pages 项目已废弃，改用 Workers Builds）。
+# 本地开发（astro dev + platformProxy）自动使用本地模拟的 D1/R2。
+# Workers Builds（Git 集成）push 后自动执行 npm run build && npx wrangler deploy，
+# 绑定全部由本文件声明，无需在 dashboard 手动配置。
 name = "flowerdeer"
+# 官方推荐入口（@astrojs/cloudflare v14）：main 指向包内 entrypoint，
+# 构建期始终存在；构建后 vite-plugin 生成 .wrangler/deploy/config.json
+# 重定向，`wrangler deploy` 会自动改用 dist/server/wrangler.json
+# （其中 main/assets 已被修正为真实产物路径）。
+main = "@astrojs/cloudflare/entrypoints/server"
 compatibility_date = "2026-10-15"
 compatibility_flags = ["nodejs_compat"]
-pages_build_output_dir = "dist"
 
+# 静态资源：请求先匹配静态文件，未命中（如 / 、/blog/ 等 SSR 路由）
+# 自动进入 worker 渲染（见适配器文档）。
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+
+# 内容数据库（表结构见 src/db/schema.sql，生产已建表）
 [[d1_databases]]
 binding = "DB"
 database_name = "flowerdeer"
 database_id = "bc6fd1c1-3d66-410f-88cc-31b77caadcdd"
 
+# 图片/音频对象存储
 [[r2_buckets]]
 binding = "R2"
 bucket_name = "flowerdeer-media"
