@@ -56,16 +56,10 @@ a {
 }
 
 .admin-brand-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   width: 26px;
   height: 26px;
   border-radius: 8px;
-  background: #18181b;
-  color: #fff;
-  font-size: 13px;
-  font-weight: 500;
+  object-fit: contain;
 }
 
 .admin-brand-text {
