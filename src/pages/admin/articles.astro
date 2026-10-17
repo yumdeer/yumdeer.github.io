@@ -43,10 +43,13 @@ const collections = [
       <div class="admin-row-form">
         <label>标题 <input name="title" required /></label>
         <label>分类
-          <input name="collection" list="coll-list" placeholder="选择或输入新分类" required />
-          <datalist id="coll-list">
+          <select name="collection" id="coll-select">
             {collections.map(([value, text]) => <option value={value}>{text}</option>)}
-          </datalist>
+            <option value="__new__">＋ 新建分类…</option>
+          </select>
+        </label>
+        <label id="new-coll-field" hidden>新分类名
+          <input name="newCollection" placeholder="如：生活 / 旅行" maxlength="20" />
         </label>
         <label>发布日期 <input name="pubDate" type="date" /></label>
         <label>简介 <input name="description" placeholder="一两句话（可选）" /></label>
@@ -93,7 +96,27 @@ const collections = [
   const previewLink = editor.querySelector('#preview-link') as HTMLAnchorElement;
   const bodyMd = editor.elements.namedItem('bodyMd') as HTMLTextAreaElement;
   const v = (n: string) => editor.elements.namedItem(n) as HTMLInputElement;
+  const collSelect = v('collection') as unknown as HTMLSelectElement;
+  const newCollField = document.getElementById('new-coll-field')!;
+  const newCollInput = v('newCollection');
   let currentSlug = '';
+
+  // 分类 select：选「＋ 新建分类…」显示命名输入框，选回已有分类则隐藏
+  const syncNewCollField = () => {
+    newCollField.hidden = collSelect.value !== '__new__';
+  };
+  collSelect.addEventListener('change', () => {
+    syncNewCollField();
+    if (!newCollField.hidden) newCollInput.focus();
+  });
+  // 打开文章时同步选中其分类；值不在选项里（后台直接写的自定义值）则补选项
+  const selectCollection = (value: string) => {
+    if (![...collSelect.options].some((o) => o.value === value)) {
+      collSelect.options.add(new Option(value, value));
+    }
+    collSelect.value = value;
+    syncNewCollField();
+  };
 
   const flash = (text: string) => {
     msg.textContent = text;
@@ -239,6 +262,7 @@ const collections = [
       editor.dataset.slug = '';
       v('pubDate').value = new Date().toISOString().slice(0, 10);
       previewLink.hidden = true;
+      syncNewCollField();
       return;
     }
 
@@ -251,7 +275,7 @@ const collections = [
       currentSlug = slug;
       editor.dataset.slug = slug;
       v('title').value = a.title;
-      v('collection').value = a.collection;
+      selectCollection(a.collection);
       v('pubDate').value = a.pub_date;
       v('description').value = a.description ?? '';
       v('coverUrl').value = a.cover_url ?? '';
@@ -280,6 +304,14 @@ const collections = [
   // ── 保存（新建或更新） ──────────────────────────────────────────
   editor.addEventListener('submit', async (e) => {
     e.preventDefault();
+    // 分类：选「＋ 新建分类…」时取命名输入框的值（必填）
+    const collection =
+      collSelect.value === '__new__' ? newCollInput.value.trim() : collSelect.value;
+    if (!collection) {
+      msg.textContent = '请填写新分类名';
+      newCollInput.focus();
+      return;
+    }
     msg.textContent = '保存中…';
     const r = await fetch('/api/admin/articles', {
       method: 'POST',
@@ -287,7 +319,7 @@ const collections = [
       body: JSON.stringify({
         slug: currentSlug || undefined,
         title: v('title').value,
-        collection: v('collection').value.trim(),
+        collection,
         pubDate: v('pubDate').value || undefined,
         description: v('description').value || undefined,
         coverUrl: v('coverUrl').value || undefined,
@@ -299,12 +331,9 @@ const collections = [
     });
     const data = await r.json();
     if (r.ok) {
-      if (!currentSlug) {
-        location.reload(); // 新建后刷新列表
-      } else {
-        msg.textContent = '已保存 ✓';
-        setTimeout(() => (msg.textContent = ''), 1500);
-      }
+      // 新建/更新统一刷新：列表分类标签与下拉选项立即反映保存结果
+      // （此前更新后不刷新，列表与 datalist 仍是旧值，看似"改了没生效"）
+      location.reload();
     } else {
       msg.textContent = data.error || '保存失败';
     }
