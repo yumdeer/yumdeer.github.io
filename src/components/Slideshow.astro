@@ -159,7 +159,9 @@ const { photos, title } = Astro.props;
       ctrl.hidden = false;
       autoWanted = true;
       ctrlToggle.textContent = '⏸';
-      if (ended) show(0);
+      // 放映永远从第一张开始：停在末张（或 END 画面）时进入放映，
+      // 否则只放 1 张、4 秒后就 END，与"整目录放映"的预期不符
+      show(0);
       // 全屏请求不阻塞放映启动（部分环境 promise 不 settle / 无全屏 API）
       root.requestFullscreen?.().catch(() => {});
       wake();
