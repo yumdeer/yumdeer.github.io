@@ -17,7 +17,8 @@ try {
 }
 
 const fmt = (d: string) => d.replaceAll('-', '.');
-const label = (c: string) => (c === 'photography' ? '摄影' : '技术');
+// 内置分类有短标签；自定义分类（管理后台任意输入）原样显示
+const label = (c: string) => ({ photography: '摄影', tech: '技术' })[c] ?? c;
 ---
 
 <Layout title="随笔" description="摄影随笔与技术文章" activePath="/blog/" theme="dark">

@@ -41,9 +41,21 @@ const slides = photos.map((p) => ({
 >
   <div class="project-page">
     <div class="project-head">
-      <h1>{project.title}{project.year ? ` ${project.year}` : ''}</h1>
+      <h1 data-back title="点击返回">{project.title}{project.year ? ` ${project.year}` : ''}</h1>
       {project.description && <p class="project-desc">{project.description}</p>}
     </div>
     <Slideshow photos={slides} title={project.title} />
   </div>
 </Layout>
+
+<script>
+  // 点项目标题 = 返回上一页（与幻灯片 × 一致）。
+  // astro 模块脚本只执行一次，SPA 导航需挂 astro:page-load 重新绑定。
+  const bindTitleBack = () => {
+    document.querySelector('.project-head h1[data-back]')?.addEventListener('click', () => {
+      if (history.length > 1) history.back();
+      else location.assign('/');
+    });
+  };
+  document.addEventListener('astro:page-load', bindTitleBack);
+</script>

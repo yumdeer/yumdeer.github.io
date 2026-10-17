@@ -363,42 +363,58 @@ img {
   }
 }
 
-/* ── 首页精选网格 ─────────────────────────────────────────────────────── */
+/* ── 首页精选网格（瀑布流：保留照片原始横竖比例，等比缩放不裁切） ───────── */
 
 .selected-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 8px;
+  columns: 2;
+  column-gap: 8px;
   padding: 24px;
 }
 
 @media (min-width: 641px) {
   .selected-grid {
-    grid-template-columns: repeat(3, 1fr);
+    columns: 3;
   }
 }
 
 @media (min-width: 1024px) {
   .selected-grid {
-    grid-template-columns: repeat(4, 1fr);
+    columns: 4;
   }
 }
 
 .selected-grid a {
+  position: relative;
   display: block;
   overflow: hidden;
   background: #fafafa;
+  break-inside: avoid;
+  margin-bottom: 8px;
 }
 
 .selected-grid img {
+  position: relative;
+  z-index: 1;
+  display: block;
   width: 100%;
   height: 100%;
-  aspect-ratio: 3 / 2;
-  object-fit: cover;
+  object-fit: cover; /* tile 比例 = 照片比例（内联 aspect-ratio），无视觉裁切 */
   transition: opacity 0.2s;
 }
 
-.selected-grid a:hover img {
+/* LQIP 模糊占位：垫在主图下面，主图加载完成后自然盖住 */
+.selected-grid img.grid-blur {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: blur(16px) saturate(1.1);
+  transform: scale(1.06);
+}
+
+.selected-grid a:hover img:not(.grid-blur) {
   opacity: 0.85;
 }
 
@@ -427,6 +443,12 @@ img {
   font-size: 14px;
   font-weight: normal;
   letter-spacing: 0.5px;
+  cursor: pointer;
+}
+
+.project-head h1[data-back]:hover {
+  text-decoration: underline;
+  text-underline-offset: 5px;
 }
 
 .project-head .project-desc {
@@ -498,6 +520,174 @@ img {
   z-index: 6;
 }
 
+/* ── 幻灯片工具按钮（× 返回 / ▶ 放映） ─────────────────────────────── */
+
+.slide-close,
+.slide-present {
+  position: absolute;
+  top: 18px;
+  z-index: 8;
+  border: none;
+  background: rgba(0, 0, 0, 0.32);
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.slide-close {
+  right: 24px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  font-size: 20px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.slide-present {
+  right: 72px;
+  height: 36px;
+  padding: 0 15px;
+  border-radius: 18px;
+  font-size: 12px;
+  letter-spacing: 2px;
+}
+
+.slide-close:hover,
+.slide-present:hover {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+/* ── END 结束画面 ─────────────────────────────────────────────────── */
+
+.slide-end {
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: #fafafa;
+  text-align: center;
+}
+
+.slide-end__word {
+  margin: 0;
+  font-size: 46px;
+  font-weight: 600;
+  letter-spacing: 14px;
+  text-indent: 14px; /* 抵消最后一个字的字距，视觉居中 */
+  color: #111;
+}
+
+.slide-end__title {
+  margin: 0;
+  font-size: 12px;
+  color: #888;
+  letter-spacing: 1px;
+}
+
+.slide-end__actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.slide-btn {
+  border: 1px solid #d8d8dc;
+  background: #fff;
+  color: #111;
+  border-radius: 18px;
+  padding: 9px 20px;
+  font-size: 12px;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.slide-btn:hover {
+  background: #111;
+  color: #fff;
+  border-color: #111;
+}
+
+.slide-end__hint {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: #b3b3b8;
+  letter-spacing: 0.5px;
+}
+
+/* ── 放映模式（类 PPT：全屏 + 自动播放） ───────────────────────────── */
+
+.slideshow:fullscreen {
+  background: #000;
+}
+
+.project-page:has(.slideshow.is-presenting) .project-head {
+  display: none;
+}
+
+.slideshow.is-presenting .slide-stage {
+  padding: 0;
+}
+
+.slideshow.is-presenting .slide-close,
+.slideshow.is-presenting .slide-present,
+.slideshow.is-presenting .slide-counter {
+  display: none;
+}
+
+.slide-ctrl {
+  position: absolute;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: rgba(20, 20, 24, 0.62);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-radius: 22px;
+  padding: 5px 8px;
+  transition: opacity 0.3s;
+}
+
+.slide-ctrl.is-idle {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.slide-ctrl button {
+  min-width: 34px;
+  height: 34px;
+  border-radius: 17px;
+  border: none;
+  background: transparent;
+  color: #eee;
+  font-size: 15px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.slide-ctrl button:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.slide-ctrl span {
+  color: #aaa;
+  font-size: 11px;
+  letter-spacing: 1px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
 @media (max-width: 768px) {
   .project-page {
     height: auto;
@@ -519,6 +709,30 @@ img {
 
   .slide-counter {
     right: 24px;
+  }
+
+  .slide-close {
+    top: 12px;
+    right: 14px;
+    width: 32px;
+    height: 32px;
+  }
+
+  .slide-present {
+    top: 12px;
+    right: 56px;
+    height: 32px;
+    padding: 0 12px;
+  }
+
+  .slide-end__word {
+    font-size: 34px;
+    letter-spacing: 10px;
+    text-indent: 10px;
+  }
+
+  .slide-ctrl {
+    bottom: 16px;
   }
 }
 

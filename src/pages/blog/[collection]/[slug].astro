@@ -21,7 +21,7 @@ if (!article) {
 }
 
 const fmt = (d: string) => d.replaceAll('-', '.');
-const label = article.collection === 'photography' ? '摄影' : '技术';
+const label = ({ photography: '摄影', tech: '技术' })[article.collection] ?? article.collection;
 ---
 
 <Layout title={article.title} description={article.description ?? undefined} activePath="/blog/" theme="dark">

@@ -1,7 +1,10 @@
 ---
 // ────────────────────────────────────────────────────────────────────────────
 //  幻灯片 — 项目页核心组件：一次一张大图，键盘左右键 / 点击左右半屏 / 触摸滑动
-//  切换，左下角照片说明，右下角计数器。参照 yundongshu.com 的浏览体验。
+//  切换，左下角照片说明，右下角计数器。
+//  · 到末尾再前进 → END 结束画面（可重新播放）
+//  · ▶ 放映模式：全屏 + 4s 自动播放（类 PPT），控制条空闲自动隐藏
+//  · × / 点击项目标题 → 返回上一页
 // ────────────────────────────────────────────────────────────────────────────
 import { SLIDE_SIZES } from '../lib/photo-sizes';
 
@@ -42,12 +45,38 @@ const { photos, title } = Astro.props;
     <div class="slide-zone next" aria-hidden="true"></div>
     <span class="slide-caption" data-caption></span>
     <span class="slide-counter" data-counter></span>
+
+    <button type="button" class="slide-close" data-close aria-label="关闭返回" title="关闭返回">×</button>
+    <button type="button" class="slide-present" data-present aria-label="放映模式">▶ 放映</button>
+
+    <div class="slide-end" data-end hidden>
+      <p class="slide-end__word">END</p>
+      <p class="slide-end__title">《{title}》已全部放映</p>
+      <div class="slide-end__actions">
+        <button type="button" class="slide-btn" data-replay>↻ 重新播放</button>
+        <button type="button" class="slide-btn" data-exit>返回</button>
+      </div>
+      <p class="slide-end__hint">按 ← 返回上一张</p>
+    </div>
+
+    <div class="slide-ctrl" data-ctrl hidden>
+      <button type="button" data-ctrl-prev aria-label="上一张">‹</button>
+      <button type="button" data-ctrl-toggle aria-label="暂停 / 播放">⏸</button>
+      <button type="button" data-ctrl-next aria-label="下一张">›</button>
+      <span data-ctrl-counter></span>
+      <button type="button" data-ctrl-exit aria-label="退出放映">✕</button>
+    </div>
   </div>
 </div>
 
 <script>
   // 幻灯片交互（ClientRouter 下每次导航后重新绑定；先清理旧键盘监听避免叠加）
   let slideshowKeys: ((e: KeyboardEvent) => void) | null = null;
+
+  const goBack = () => {
+    if (history.length > 1) history.back();
+    else location.assign('/');
+  };
 
   const initSlideshow = () => {
     if (slideshowKeys) {
@@ -57,27 +86,155 @@ const { photos, title } = Astro.props;
     const root = document.querySelector('.slideshow') as HTMLElement | null;
     if (!root) return;
 
-    const imgs = [...root.querySelectorAll('img')] as HTMLImageElement[];
+    const imgs = [...root.querySelectorAll('.slide-stage > img')] as HTMLImageElement[];
     const captionEl = root.querySelector('[data-caption]') as HTMLElement;
     const counterEl = root.querySelector('[data-counter]') as HTMLElement;
     const zonePrev = root.querySelector('.slide-zone.prev') as HTMLElement;
     const zoneNext = root.querySelector('.slide-zone.next') as HTMLElement;
+    const endEl = root.querySelector('[data-end]') as HTMLElement;
+    const ctrl = root.querySelector('[data-ctrl]') as HTMLElement;
+    const ctrlCounter = root.querySelector('[data-ctrl-counter]') as HTMLElement;
+    const ctrlToggle = root.querySelector('[data-ctrl-toggle]') as HTMLButtonElement;
     if (!imgs.length) return;
-    let current = 0;
 
-    const show = (i: number) => {
-      current = (i + imgs.length) % imgs.length;
-      imgs.forEach((img, idx) => img.classList.toggle('is-active', idx === current));
-      captionEl.textContent = imgs[current].alt || '';
-      counterEl.textContent = `${current + 1} / ${imgs.length}`;
+    let current = 0;
+    let ended = false;
+
+    // ── 放映模式状态 ──
+    let presenting = false;
+    let autoTimer: ReturnType<typeof setInterval> | null = null;
+    let autoWanted = true; // 用户是否想要自动播放（⏸ 切换）
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const stopAuto = () => {
+      if (autoTimer) clearInterval(autoTimer);
+      autoTimer = null;
+    };
+    const startAuto = () => {
+      stopAuto();
+      if (!presenting || !autoWanted) return;
+      autoTimer = setInterval(() => next(), 4000);
     };
 
-    zonePrev.addEventListener('click', () => show(current - 1));
-    zoneNext.addEventListener('click', () => show(current + 1));
+    const show = (i: number) => {
+      ended = false;
+      endEl.hidden = true;
+      current = Math.max(0, Math.min(i, imgs.length - 1));
+      imgs.forEach((img, idx) => img.classList.toggle('is-active', idx === current));
+      captionEl.textContent = imgs[current].alt || '';
+      const text = `${current + 1} / ${imgs.length}`;
+      counterEl.textContent = text;
+      ctrlCounter.textContent = text;
+    };
+
+    const endShow = () => {
+      ended = true;
+      endEl.hidden = false;
+      imgs.forEach((img) => img.classList.remove('is-active'));
+      captionEl.textContent = '';
+      counterEl.textContent = '';
+      ctrlCounter.textContent = 'END';
+      stopAuto(); // 到末尾暂停自动播放，等用户选择
+    };
+
+    const next = () => (current >= imgs.length - 1 ? endShow() : show(current + 1));
+    const prev = () => {
+      if (ended) {
+        show(imgs.length - 1);
+        return;
+      }
+      show(Math.max(0, current - 1));
+    };
+
+    // ── 放映模式 ──
+    const wake = () => {
+      ctrl.classList.remove('is-idle');
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => ctrl.classList.add('is-idle'), 2600);
+    };
+
+    const enterPresent = () => {
+      presenting = true;
+      root.classList.add('is-presenting');
+      ctrl.hidden = false;
+      autoWanted = true;
+      ctrlToggle.textContent = '⏸';
+      if (ended) show(0);
+      // 全屏请求不阻塞放映启动（部分环境 promise 不 settle / 无全屏 API）
+      root.requestFullscreen?.().catch(() => {});
+      wake();
+      startAuto();
+    };
+
+    const exitPresent = () => {
+      presenting = false;
+      stopAuto();
+      if (idleTimer) clearTimeout(idleTimer);
+      ctrl.hidden = true;
+      ctrl.classList.remove('is-idle');
+      root.classList.remove('is-presenting');
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    };
+
+    root.addEventListener('fullscreenchange', () => {
+      if (!document.fullscreenElement && presenting) exitPresent();
+    });
+
+    root.querySelector('[data-present]')?.addEventListener('click', enterPresent);
+    root.querySelector('[data-ctrl-exit]')?.addEventListener('click', exitPresent);
+    ctrlToggle.addEventListener('click', () => {
+      autoWanted = !autoWanted;
+      ctrlToggle.textContent = autoWanted ? '⏸' : '▶';
+      if (autoWanted) startAuto();
+      else stopAuto();
+    });
+    root.querySelector('[data-ctrl-prev]')?.addEventListener('click', () => {
+      prev();
+      startAuto(); // 手动切换后重置自动播放计时
+      wake();
+    });
+    root.querySelector('[data-ctrl-next]')?.addEventListener('click', () => {
+      next();
+      startAuto();
+      wake();
+    });
+    root.addEventListener('mousemove', () => presenting && wake());
+    root.addEventListener('touchstart', () => presenting && wake(), { passive: true });
+
+    // ── END 画面按钮 ──
+    root.querySelector('[data-replay]')?.addEventListener('click', () => {
+      show(0);
+      startAuto();
+    });
+    root.querySelector('[data-exit]')?.addEventListener('click', () => {
+      exitPresent();
+      goBack();
+    });
+    root.querySelector('[data-close]')?.addEventListener('click', () => {
+      exitPresent();
+      goBack();
+    });
+
+    zonePrev.addEventListener('click', () => {
+      prev();
+      if (presenting) startAuto();
+    });
+    zoneNext.addEventListener('click', () => {
+      next();
+      if (presenting) startAuto();
+    });
 
     slideshowKeys = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowLeft') show(current - 1);
-      if (e.key === 'ArrowRight') show(current + 1);
+      if (e.key === 'ArrowLeft') prev();
+      if (e.key === 'ArrowRight') next();
+      if (e.key === 'Escape' && presenting) exitPresent();
+      if (e.key === ' ' && presenting) {
+        e.preventDefault();
+        autoWanted = !autoWanted;
+        ctrlToggle.textContent = autoWanted ? '⏸' : '▶';
+        if (autoWanted) startAuto();
+        else stopAuto();
+      }
     };
     document.addEventListener('keydown', slideshowKeys);
 
@@ -88,7 +245,10 @@ const { photos, title } = Astro.props;
       'touchend',
       (e) => {
         const dx = e.changedTouches[0].clientX - touchX;
-        if (Math.abs(dx) > 40) show(current + (dx < 0 ? 1 : -1));
+        if (Math.abs(dx) > 40) {
+          dx < 0 ? next() : prev();
+          if (presenting) startAuto();
+        }
       },
       { passive: true },
     );

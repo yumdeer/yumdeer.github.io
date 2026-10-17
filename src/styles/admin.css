@@ -688,8 +688,7 @@ label.chk input[type='checkbox'] {
 
 .admin-photo-grid img {
   width: 100%;
-  aspect-ratio: 4 / 3;
-  object-fit: cover;
+  height: auto; /* 等比缩放，保留横竖原始比例 */
   display: block;
   background: #f1f1f4;
 }
