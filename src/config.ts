@@ -10,7 +10,7 @@ export interface NavItem {
 }
 
 export const site = {
-  name: 'Yumdeer',
+  name: 'flowerdeer',
   // Optional second-script name (e.g. a Chinese 中文名) shown under the brand and
   // in a couple of prose pages. Leave it '' to hide it everywhere. See the README
   // for how to self-host a font subset so it renders identically on every device.

@@ -140,6 +140,42 @@ export async function listAllPhotos(db: ReturnType<typeof getDB>) {
   return results;
 }
 
+// ── 站点设置（key-value，后台可编辑的页面文案等）─────────────────────────
+// 表不存在时自动建（幂等）：生产库无需手动跑迁移，首次访问/保存即创建。
+// 当前 key：about_md = 「INFO 艺术家简介」页正文（Markdown）。
+export async function getSetting(db: ReturnType<typeof getDB>, key: string): Promise<string | null> {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS site_settings (
+         key   TEXT PRIMARY KEY,
+         value TEXT NOT NULL,
+         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+       )`,
+    )
+    .run();
+  const row = await db.prepare('SELECT value FROM site_settings WHERE key = ?').bind(key).first<{ value: string }>();
+  return row?.value ?? null;
+}
+
+export async function setSetting(db: ReturnType<typeof getDB>, key: string, value: string): Promise<void> {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS site_settings (
+         key   TEXT PRIMARY KEY,
+         value TEXT NOT NULL,
+         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+       )`,
+    )
+    .run();
+  await db
+    .prepare(
+      `INSERT INTO site_settings (key, value, updated_at) VALUES (?, ?, datetime('now'))
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    )
+    .bind(key, value)
+    .run();
+}
+
 // R2 键约定
 export const r2Key = {
   photoFull: (projectSlug: string, photoSlug: string) => `img/${projectSlug}/${photoSlug}/full.webp`,

@@ -1,0 +1,57 @@
+---
+// /admin/about — 站点简介编辑：Markdown 编辑「INFO · 艺术家简介」页正文，
+// 保存到 D1 site_settings.about_md，前台 /about/ 即时生效。
+import AdminLayout from '../../layouts/AdminLayout.astro';
+import { getDB, getSetting } from '../../lib/db';
+
+let aboutMd: string | null = null;
+try {
+  aboutMd = await getSetting(getDB(), 'about_md');
+} catch {}
+---
+<AdminLayout title="简介">
+  <h1>简介</h1>
+  <p class="admin-hint">
+    编辑前台「INFO · 艺术家简介」页（侧栏底部入口）的正文。支持 Markdown：
+    段落、链接、图片、音乐外链等，与文章编辑一致。留空保存 = 恢复默认文案。
+  </p>
+
+  <form class="admin-form" id="about-form">
+    <label>
+      简介（Markdown）
+      <textarea name="about_md" rows="14" placeholder="我是 …" style="width:100%;font:inherit">{aboutMd ?? ''}</textarea>
+    </label>
+    <div class="admin-progress" id="about-progress" hidden></div>
+    <button type="submit" id="about-btn">保存</button>
+  </form>
+</AdminLayout>
+
+<script>
+  document.getElementById('about-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target as HTMLFormElement;
+    const md = (f.elements.namedItem('about_md') as HTMLTextAreaElement).value;
+    const btn = document.getElementById('about-btn') as HTMLButtonElement;
+    const progress = document.getElementById('about-progress') as HTMLElement;
+    btn.disabled = true;
+    progress.hidden = false;
+    progress.textContent = '保存中…';
+    try {
+      const r = await fetch('/api/admin/about', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ aboutMd: md }),
+      });
+      if (r.ok) {
+        progress.textContent = '已保存 ✓ 前台 /about/ 即时生效';
+      } else {
+        alert((await r.json().catch(() => ({}))).error || '保存失败');
+        progress.hidden = true;
+      }
+    } catch {
+      alert('保存失败（网络错误）');
+      progress.hidden = true;
+    }
+    btn.disabled = false;
+  });
+</script>

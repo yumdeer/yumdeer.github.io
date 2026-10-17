@@ -1,21 +1,30 @@
 ---
+// INFO · 艺术家简介 — 正文来自后台「简介」编辑（D1 site_settings.about_md），
+// 未编辑过时回退到默认文案。Markdown 渲染，支持链接/图片/音乐外链。
 import Layout from '../layouts/Layout.astro';
-import { site } from '../config';
-import { social } from '../config';
+import { site, social } from '../config';
+import { getDB, getSetting } from '../lib/db';
+import { renderMarkdown } from '../lib/markdown';
+
+const DEFAULT_ABOUT_MD = `我是 ${site.name}（${site.nameZh}），一名摄影爱好者。
+这个网站收录我的摄影作品与文字——数码与胶片，风光与街头，以及一些日常的、无所事事的瞬间。
+
+如果你对我的作品感兴趣，欢迎通过以下方式联系我：
+
+[GitHub](${social.github}) · [Instagram](${social.instagram})`;
+
+let aboutMd: string | null = null;
+try {
+  aboutMd = await getSetting(getDB(), 'about_md');
+} catch {
+  // 数据库未初始化
+}
+const aboutHtml = renderMarkdown(aboutMd?.trim() ? aboutMd : DEFAULT_ABOUT_MD);
 ---
 
-<Layout title="关于" description={`关于 ${site.name}`} activePath="/about/">
+<Layout title="INFO" description={`艺术家简介 · ${site.nameZh}`} activePath="/about/">
   <div class="prose-page">
-    <h1>关于</h1>
-    <p>
-      我是 {site.name}{site.nameZh ? `（${site.nameZh}）` : ''}，一名摄影爱好者。
-      这个网站收录我的摄影作品与文字——数码与胶片，风光与街头，以及一些日常的、无所事事的瞬间。
-    </p>
-    <p>如果你对我的作品感兴趣，欢迎通过以下方式联系我：</p>
-    <p>
-      <a href={social.github} target="_blank" rel="noopener noreferrer">GitHub</a>
-      　·　
-      <a href={social.instagram} target="_blank" rel="noopener noreferrer">Instagram</a>
-    </p>
+    <h1>INFO</h1>
+    <div class="prose" set:html={aboutHtml} />
   </div>
 </Layout>

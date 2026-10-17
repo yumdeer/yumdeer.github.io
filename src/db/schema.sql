@@ -63,6 +63,14 @@ CREATE TABLE IF NOT EXISTS articles (
 );
 CREATE INDEX IF NOT EXISTS idx_articles_list ON articles(collection, pub_date DESC);
 
+-- 站点设置（后台可编辑的页面文案等；当前 key：about_md = 艺术家简介正文 Markdown）
+-- 代码侧 getSetting/setSetting 首次访问会自动建表（IF NOT EXISTS 幂等）。
+CREATE TABLE IF NOT EXISTS site_settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- 音乐曲目（音频文件在 R2：audio/{slug}.mp3；与内置合成环境音并存）
 CREATE TABLE IF NOT EXISTS tracks (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
