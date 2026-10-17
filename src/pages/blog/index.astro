@@ -2,6 +2,7 @@
 // 博客列表 — 文章来自 D1，按日期倒序。暗夜主题。
 import Layout from '../../layouts/Layout.astro';
 import { getDB, listArticles } from '../../lib/db';
+import { collLabelOf } from '../../lib/collections';
 
 let posts: {
   slug: string;
@@ -17,8 +18,6 @@ try {
 }
 
 const fmt = (d: string) => d.replaceAll('-', '.');
-// 内置分类有短标签；自定义分类（管理后台任意输入）原样显示
-const label = (c: string) => ({ photography: '摄影', tech: '技术' })[c] ?? c;
 ---
 
 <Layout title="随笔" description="摄影随笔与技术文章" activePath="/blog/" theme="dark">
@@ -32,7 +31,7 @@ const label = (c: string) => ({ photography: '摄影', tech: '技术' })[c] ?? c
             <a href={`/blog/${post.collection}/${post.slug}/`}>
               {post.draft ? '[草稿] ' : ''}{post.title}
             </a>
-            <span class="post-coll">{label(post.collection)}</span>
+            <span class="post-coll">{collLabelOf(post.collection)}</span>
           </li>
         ))}
       </ul>

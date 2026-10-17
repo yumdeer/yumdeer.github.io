@@ -4,6 +4,7 @@
 // 音乐插入（网易云外链播放器 / 上传 MP3）、自定义分类、粘贴带 frontmatter 的旧文自动解析。
 import AdminLayout from '../../layouts/AdminLayout.astro';
 import { getDB, listArticles } from '../../lib/db';
+import { collLabel } from '../../lib/collections';
 
 let articles: Awaited<ReturnType<typeof listArticles>> = [];
 try {
@@ -11,7 +12,6 @@ try {
 } catch {}
 
 // 分类选项：内置两个 + 数据库已有分类（用户可输入新值，保存后自动出现在选项里）
-const collLabel: Record<string, string> = { photography: '摄影随笔', tech: '技术' };
 const collections = [
   ...new Map(
     articles

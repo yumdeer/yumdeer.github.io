@@ -3,6 +3,7 @@
 import Layout from '../../../layouts/Layout.astro';
 import { getDB, getArticle } from '../../../lib/db';
 import { renderMarkdown } from '../../../lib/markdown';
+import { collLabelOf } from '../../../lib/collections';
 
 const { collection, slug } = Astro.params;
 
@@ -21,14 +22,13 @@ if (!article) {
 }
 
 const fmt = (d: string) => d.replaceAll('-', '.');
-const label = ({ photography: '摄影', tech: '技术' })[article.collection] ?? article.collection;
 ---
 
 <Layout title={article.title} description={article.description ?? undefined} activePath="/blog/" theme="dark">
   <article class="article" data-ek-article={article.slug}>
     <header class="article-header">
       <h1>{article.title}</h1>
-      <p class="article-meta">{fmt(article.pub_date)}　{label}</p>
+      <p class="article-meta">{fmt(article.pub_date)}　{collLabelOf(article.collection)}</p>
     </header>
 
     {article.cover_url && (
