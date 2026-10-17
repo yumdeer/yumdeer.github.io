@@ -806,15 +806,18 @@ img {
   text-underline-offset: 3px;
 }
 
-/* ── 博客文章 ─────────────────────────────────────────────────────────── */
+/* ── 博客文章（参考 sevenliang.com：窄栏居中、图片内联、舒适行距）────── */
 
 .article {
   max-width: 680px;
+  margin: 0 auto; /* 居中窄栏：宽屏两侧留白对称，不再右侧空一大片 */
   padding: 60px 24px 100px;
 }
 
 .article-header {
-  margin-bottom: 48px;
+  margin-bottom: 44px;
+  padding-bottom: 28px;
+  border-bottom: 1px solid #ececec;
 }
 
 .article-header h1 {
@@ -831,69 +834,43 @@ img {
 }
 
 .article .prose p {
-  margin-bottom: 1.4em;
+  margin-bottom: 1.5em;
   color: #222;
-  line-height: 1.9;
+  font-size: 15px;
+  line-height: 2;
 }
 
 .article .prose h2,
 .article .prose h3 {
   font-weight: normal;
   letter-spacing: 0.3px;
-  margin: 2em 0 0.8em;
+  margin: 2.2em 0 0.9em;
 }
 
+/* 图片按编辑器插入顺序内联在文字流中，全栏宽（参考站 .blog-figure） */
 .article .prose img {
   width: 100%;
-  margin: 1.5em 0;
+  height: auto;
+  margin: 2.2em 0;
 }
 
 /* 文章内嵌音频（管理后台上传 MP3 插入）与网易云 iframe */
 .article .prose audio {
   width: 100%;
-  margin: 1.5em 0;
+  margin: 2em 0;
 }
 
-/* 网易云外链播放器：圆角 + 细边框 + 轻阴影，消除生硬白色方块感 */
+/* 网易云外链播放器：缩小 + 圆角 + 细边框，贴文字流左对齐更融合。
+   zoom 缩放（现代浏览器均已支持）同时收缩占位，无残留空白。 */
 .article .prose iframe {
   display: block;
-  border-radius: 12px;
-  border: 1px solid rgba(0, 0, 0, 0.08);
+  margin: 1.8em 0 2.2em;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.07);
   background: #fff;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.07);
+  box-shadow: 0 1px 8px rgba(0, 0, 0, 0.05);
   overflow: hidden; /* 配合 border-radius 裁切 iframe 直角 */
-}
-
-/* ── 文章书页式双栏：左文字列（播放器置顶）/ 右图片列 ──────────────────
-   正文渲染时已按块拆分（splitArticleBody）：p/h2/ul… → 左列，
-   img → 右列，iframe/audio → 左列顶部。窄屏（<1024px，手机/平板）
-   DOM 顺序自然上下排：播放器+文字在上、图片全宽在下。 */
-@media (min-width: 1024px) {
-  .article {
-    max-width: 1000px;
-  }
-  .article-body {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(280px, 40%);
-    column-gap: 3em;
-    align-items: start; /* 两列各自顶部对齐，互不撑行高 */
-  }
-  .article .prose-media img {
-    margin: 0 0 1.6em;
-  }
-}
-
-/* 播放器置顶于文字列：靠左贴合书页第一行，不居中悬浮 */
-.article .prose-text > iframe:first-child {
-  margin: 0 0 2.4em;
-}
-
-/* 图片列：间距统一交给块级容器（img 的 p 包裹或裸 img），避免双重 margin */
-.article .prose-media > * {
-  margin: 0 0 1.6em;
-}
-.article .prose-media img {
-  margin: 0;
+  zoom: 0.85;
 }
 
 .article .prose a {

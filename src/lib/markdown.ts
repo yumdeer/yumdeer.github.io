@@ -62,59 +62,6 @@ export function renderMarkdown(md: string): string {
   return marked.parse(md, { async: false }) as string;
 }
 
-// ── 文章书页式排版：正文 HTML 拆分为 文字流 / 图片 / 播放器 ──────────────
-// 宽屏双栏（左文字右图片、播放器置顶于文字列）需要把线性正文按块分拣：
-//   · <p><img></p> / 裸 <img> → 图片列（保持原顺序）
-//   · <iframe>（网易云外链）/ <audio>（上传 MP3）→ 文字列顶部
-//   · 其余（p/h2/ul/blockquote/pre…）→ 文字流，保持原顺序
-// marked 顶层块无嵌套（嵌套只发生在 blockquote/pre 内部），按起止标签
-// 配对扫描即可安全切分。
-export function splitArticleBody(html: string): {
-  textHtml: string;
-  mediaHtml: string;
-  playerHtml: string;
-} {
-  const re = /<(p|h[1-6]|ul|ol|blockquote|pre|table|iframe|audio|figure|img)[\s>]/g;
-  const textParts: string[] = [];
-  const mediaParts: string[] = [];
-  const playerParts: string[] = [];
-  let pos = 0;
-  let m: RegExpExecArray | null;
-  const pushText = (s: string) => {
-    const t = s.trim();
-    if (t) textParts.push(t);
-  };
-  while ((m = re.exec(html))) {
-    if (m.index > pos) pushText(html.slice(pos, m.index));
-    const tag = m[1];
-    let block: string;
-    if (tag === 'img') {
-      const end = html.indexOf('>', m.index);
-      block = html.slice(m.index, end + 1);
-      pos = end + 1;
-    } else {
-      const close = `</${tag}>`;
-      const end = html.indexOf(close, m.index);
-      block = html.slice(m.index, end + close.length);
-      pos = end + close.length;
-    }
-    if (tag === 'iframe' || tag === 'audio') {
-      playerParts.push(block);
-    } else if (tag === 'img' || /^<p>\s*<img[\s>]/.test(block) || tag === 'figure') {
-      mediaParts.push(block);
-    } else {
-      textParts.push(block);
-    }
-    re.lastIndex = pos;
-  }
-  if (pos < html.length) pushText(html.slice(pos));
-  return {
-    textHtml: textParts.join('\n'),
-    mediaHtml: mediaParts.join('\n'),
-    playerHtml: playerParts.join('\n'),
-  };
-}
-
 // 旧 MDX 文章里的组件语法降级为纯 Markdown（迁移用）：
 //   <Photo src="x.jpg" caption="..." />      → ![...](...)
 //   <Gallery photos={["a.jpg","b.jpg"]} />   → 逐张图片
