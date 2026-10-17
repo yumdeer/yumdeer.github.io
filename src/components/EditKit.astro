@@ -234,10 +234,104 @@ const { email } = Astro.props;
       border-radius: 16px;
     }
   }
+
+  /* ── 文章编辑器（宽 modal：左 Markdown / 右实时预览）───────────────────
+     预览容器挂了 .article 类以复用 .article .prose 的全部排版
+     （p/h2/h3/img/audio/iframe/blockquote/code/pre），再覆盖掉
+     .article 自身的页面级布局（宽度/内边距）。 */
+  .ek-card--wide {
+    width: min(1160px, 100%);
+    height: min(86vh, 820px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden; /* 内部各自滚动 */
+  }
+  .ek-card--wide #ek-modal-body {
+    display: flex;
+    flex-direction: column;
+    min-height: 0; /* 让子滚动区正确收缩 */
+    flex: 1;
+  }
+  .ek-cols {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .ek-editor-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+  .ek-tool {
+    padding: 4px 12px;
+    font-size: 12px;
+  }
+  .ek-tool-hint {
+    font-size: 11px;
+    color: #999;
+  }
+  .ek-editor-grid {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  .ek-editor-md {
+    width: 100%;
+    height: 100%;
+    resize: none;
+    font-family: 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.7;
+    padding: 12px 14px;
+    border: 1px solid #e2e2e6;
+    border-radius: 10px;
+    background: #fafafa;
+    outline: none;
+    tab-size: 2;
+  }
+  .ek-editor-md:focus {
+    border-color: #bbb;
+    background: #fff;
+  }
+  .ek-preview {
+    overflow-y: auto;
+    border: 1px solid #eee;
+    border-radius: 10px;
+    padding: 18px 22px;
+    background: #fff;
+    /* 覆盖 .article 页面级布局，仅保留排版 */
+    max-width: none;
+    margin: 0;
+    padding: 18px 22px;
+  }
+  .ek-card--wide .ek-actions {
+    margin-top: 14px;
+    flex: none;
+  }
+  @media (max-width: 860px) {
+    /* 窄屏：编辑/预览上下排（编辑 45vh，预览自适应） */
+    .ek-card--wide {
+      height: 92vh;
+    }
+    .ek-cols {
+      grid-template-columns: 1fr;
+      gap: 0;
+    }
+    .ek-editor-grid {
+      grid-template-columns: 1fr;
+      grid-template-rows: 45vh 1fr;
+    }
+  }
 </style>
 
 <script>
   // ── 前台编辑模式：统一接管 data-ek-* 标注的容器（SPA 需 page-load 重绑）──
+  // 文章预览复用服务端同一渲染器（marked + 外链处理），预览即最终效果
+  import { renderMarkdown } from '../lib/markdown';
+
   const $ = (sel: string) => document.querySelector(sel);
   const $$ = (sel: string) => [...document.querySelectorAll<HTMLElement>(sel)];
 
@@ -263,9 +357,10 @@ const { email } = Astro.props;
   };
 
   // ── modal ──
-  const openModal = (title: string, bodyHTML: string) => {
+  const openModal = (title: string, bodyHTML: string, opts: { wide?: boolean } = {}) => {
     $('#ek-modal-title')!.textContent = title;
     $('#ek-modal-body')!.innerHTML = bodyHTML;
+    $('#ek-modal')!.querySelector('.ek-card')!.classList.toggle('ek-card--wide', !!opts.wide);
     ($('#ek-modal') as HTMLElement).hidden = false;
     ($('#ek-modal') as HTMLElement).addEventListener('click', (e) => {
       if (e.target === $('#ek-modal')) closeModal();
@@ -333,6 +428,116 @@ const { email } = Astro.props;
       body: JSON.stringify({ projectSlug, photos }),
     });
     location.reload();
+  }
+
+  // ── 文章编辑（前台就地：左 Markdown / 右实时预览）────────────────────
+  // 与后台编辑器同源的图片上传（1600px webp 压缩 → R2），成功后插入光标处
+  async function uploadArticleImage(file: File, insert: (md: string) => void) {
+    const bmp = await createImageBitmap(file).catch(() => null);
+    if (!bmp) return toast('无法读取该图片');
+    const MAX = 1600;
+    const scale = Math.min(1, MAX / Math.max(bmp.width, bmp.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(bmp.width * scale);
+    canvas.height = Math.round(bmp.height * scale);
+    canvas.getContext('2d')!.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    const b64 = canvas.toDataURL('image/webp', 0.82).split(',')[1];
+    if (b64.length > 10 * 1024 * 1024) return toast('图片过大（压缩后仍超 10MB）');
+    const r = await api('/api/admin/article-media', {
+      method: 'POST',
+      body: JSON.stringify({ kind: 'image', name: file.name, b64 }),
+    });
+    const { url } = await r.json();
+    insert(`\n\n![](${url})\n`);
+  }
+
+  function openArticleEditor(slug: string) {
+    openModal('编辑文章', `
+      <div class="ek-cols">
+        <label class="ek-field">标题<input id="ek-ar-title" /></label>
+        <label class="ek-field">简介<input id="ek-ar-desc" placeholder="一两句话（可选）" /></label>
+      </div>
+      <div class="ek-editor-toolbar">
+        <button type="button" class="ek-cancel ek-tool" id="ek-ar-img">＋ 插入图片</button>
+        <span class="ek-tool-hint">支持拖拽 / 粘贴图片直接上传</span>
+        <input type="file" id="ek-ar-file" accept="image/*" multiple hidden />
+      </div>
+      <div class="ek-editor-grid">
+        <textarea id="ek-ar-md" class="ek-editor-md" placeholder="Markdown 正文…" spellcheck="false"></textarea>
+        <div class="ek-preview article"><div class="prose" id="ek-ar-preview"></div></div>
+      </div>
+      <div class="ek-actions">
+        <button type="button" class="ek-cancel" data-close>取消</button>
+        <button type="button" class="ek-primary" id="ek-ar-save">保存</button>
+      </div>`, { wide: true });
+
+    const md = $('#ek-ar-md') as HTMLTextAreaElement;
+    const preview = $('#ek-ar-preview') as HTMLElement;
+
+    // 实时预览：input 防抖 120ms，渲染器与服务端 renderMarkdown 完全一致
+    let t: ReturnType<typeof setTimeout> | undefined;
+    md.addEventListener('input', () => {
+      clearTimeout(t);
+      t = setTimeout(() => (preview.innerHTML = renderMarkdown(md.value)), 120);
+    });
+
+    // 加载当前文章（与后台编辑器同接口）
+    api('/api/admin/articles')
+      .then((r) => r.json())
+      .then((list: { slug: string; title: string; description: string | null; body_md: string }[]) => {
+        const a = list.find((x) => x.slug === slug);
+        if (!a) return;
+        ($('#ek-ar-title') as HTMLInputElement).value = a.title;
+        ($('#ek-ar-desc') as HTMLInputElement).value = a.description ?? '';
+        md.value = a.body_md;
+        preview.innerHTML = renderMarkdown(a.body_md);
+      });
+
+    // 光标处插入
+    const insertAtCursor = (text: string) => {
+      const s = md.selectionStart ?? md.value.length;
+      const e = md.selectionEnd ?? s;
+      md.value = md.value.slice(0, s) + text + md.value.slice(e);
+      const pos = s + text.length;
+      md.focus();
+      md.setSelectionRange(pos, pos);
+      preview.innerHTML = renderMarkdown(md.value); // 立即同步预览
+    };
+
+    // 插入图片：按钮 / 拖拽 / 粘贴
+    const fileInput = $('#ek-ar-file') as HTMLInputElement;
+    $('#ek-ar-img')!.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', async () => {
+      for (const f of [...(fileInput.files ?? [])]) await uploadArticleImage(f, insertAtCursor);
+      fileInput.value = '';
+    });
+    md.addEventListener('dragover', (e) => e.preventDefault());
+    md.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      for (const f of [...e.dataTransfer!.files]) await uploadArticleImage(f, insertAtCursor);
+    });
+    md.addEventListener('paste', async (e) => {
+      const files = [...(e.clipboardData?.files ?? [])];
+      if (!files.length) return;
+      e.preventDefault();
+      for (const f of files) await uploadArticleImage(f, insertAtCursor);
+    });
+
+    // 保存（slug 已存在 → 更新）
+    $('#ek-ar-save')!.addEventListener('click', async () => {
+      const title = ($('#ek-ar-title') as HTMLInputElement).value.trim();
+      if (!title) return toast('标题必填');
+      await api('/api/admin/articles', {
+        method: 'POST',
+        body: JSON.stringify({
+          slug,
+          title,
+          description: ($('#ek-ar-desc') as HTMLInputElement).value || undefined,
+          bodyMd: md.value,
+        }),
+      });
+      location.reload();
+    });
   }
 
   // ── 各页控件注入 ──
@@ -447,18 +652,16 @@ const { email } = Astro.props;
       aboutBox.prepend(btn);
     }
 
-    // 文章页：「编辑」跳后台编辑器
+    // 文章页：✎ 就地编辑（左 Markdown / 右实时预览，不再跳后台）
     const articleBox = $('[data-ek-article]');
     if (articleBox && !articleBox.querySelector('.ek-edit-entry')) {
       const slug = articleBox.dataset.ekArticle!;
-      const btn = document.createElement('a');
+      const btn = document.createElement('button');
+      btn.type = 'button';
       btn.className = 'ek-edit-entry';
-      btn.href = `/admin/articles/?edit=${encodeURIComponent(slug)}`;
-      btn.target = '_blank';
-      btn.rel = 'noopener';
       btn.textContent = '✎ 编辑文章';
       btn.style.marginBottom = '14px';
-      btn.style.display = 'inline-block';
+      btn.addEventListener('click', () => openArticleEditor(slug));
       articleBox.prepend(btn);
     }
   }
