@@ -43,10 +43,13 @@ const collections = [
       <div class="admin-row-form">
         <label>标题 <input name="title" required /></label>
         <label>分类
-          <select name="collection" id="coll-select">
-            {collections.map(([value, text]) => <option value={value}>{text}</option>)}
-            <option value="__new__">＋ 新建分类…</option>
-          </select>
+          <span class="coll-picker">
+            <select name="collection" id="coll-select">
+              {collections.map(([value, text]) => <option value={value}>{text}</option>)}
+              <option value="__new__">＋ 新建分类…</option>
+            </select>
+            <button type="button" class="coll-del" id="coll-del" hidden title="删除此分类">🗑</button>
+          </span>
         </label>
         <label id="new-coll-field" hidden>新分类名
           <input name="newCollection" placeholder="如：生活 / 旅行" maxlength="20" />
@@ -101,12 +104,17 @@ const collections = [
   const newCollInput = v('newCollection');
   let currentSlug = '';
 
-  // 分类 select：选「＋ 新建分类…」显示命名输入框，选回已有分类则隐藏
-  const syncNewCollField = () => {
-    newCollField.hidden = collSelect.value !== '__new__';
+  // 分类 select：选「＋ 新建分类…」显示命名输入框，选回已有分类则隐藏；
+  // 选中自定义分类（非内置）时显示 🗑 删除按钮
+  const BUILTIN_COLL = new Set(['photography', 'tech']);
+  const collDelBtn = document.getElementById('coll-del') as HTMLButtonElement;
+  const syncCollUI = () => {
+    const val = collSelect.value;
+    newCollField.hidden = val !== '__new__';
+    collDelBtn.hidden = val === '__new__' || BUILTIN_COLL.has(val) || !val;
   };
   collSelect.addEventListener('change', () => {
-    syncNewCollField();
+    syncCollUI();
     if (!newCollField.hidden) newCollInput.focus();
   });
   // 打开文章时同步选中其分类；值不在选项里（后台直接写的自定义值）则补选项
@@ -115,13 +123,32 @@ const collections = [
       collSelect.options.add(new Option(value, value));
     }
     collSelect.value = value;
-    syncNewCollField();
+    syncCollUI();
   };
+
+  // 删除自定义分类：分类非独立实体，删除 = 该分类下文章全部迁入「摄影随笔」
+  collDelBtn.addEventListener('click', async () => {
+    const name = collSelect.value;
+    if (BUILTIN_COLL.has(name) || name === '__new__' || !name) return;
+    if (!confirm(`删除分类「${name}」？\n该分类下的文章将全部移入「摄影随笔」。`)) return;
+    const r = await fetch(`/api/admin/collections?name=${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    });
+    const data = await r.json().catch(() => ({}));
+    if (r.ok) {
+      location.reload(); // 刷新后下拉选项与列表标签立即反映迁移结果
+    } else {
+      flash(data.error || '删除失败');
+    }
+  });
 
   const flash = (text: string) => {
     msg.textContent = text;
     setTimeout(() => (msg.textContent = ''), 2000);
   };
+
+  // 初始同步一次：默认选中的分类可能是自定义值，需正确显示/隐藏删除按钮
+  syncCollUI();
 
   // ── 光标处插入文本 ──────────────────────────────────────────────
   function insertAtCursor(text: string) {
@@ -262,7 +289,7 @@ const collections = [
       editor.dataset.slug = '';
       v('pubDate').value = new Date().toISOString().slice(0, 10);
       previewLink.hidden = true;
-      syncNewCollField();
+      syncCollUI();
       return;
     }
 

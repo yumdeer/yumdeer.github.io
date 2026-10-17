@@ -319,6 +319,32 @@ label.chk input[type='checkbox'] {
   flex: 1;
 }
 
+/* 分类选择器：select + 删除按钮同行 */
+.coll-picker {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+.coll-picker select {
+  flex: 1;
+  min-width: 0;
+}
+.coll-del {
+  border: 0;
+  border-radius: 7px;
+  padding: 0 10px;
+  background: none;
+  color: #b6b6bd;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  transition: color 0.15s, background 0.15s;
+}
+.coll-del:hover {
+  color: #d4380d;
+  background: rgba(212, 56, 13, 0.08);
+}
+
 /* 文件上传 */
 .admin-file-label {
   flex-direction: row !important;
