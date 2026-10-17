@@ -713,11 +713,52 @@ label.chk input[type='checkbox'] {
 }
 
 .admin-photo-grid figure {
+  position: relative;
   background: #fff;
   border: 1px solid #e9e9ec;
   border-radius: 12px;
   overflow: hidden;
-  transition: box-shadow 0.15s;
+  transition: box-shadow 0.15s, opacity 0.15s;
+}
+
+/* 拖拽排序手柄：悬浮卡片左上角，按住它拖动换顺序（松手自动保存） */
+.ph-drag {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 3;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #6c6c75;
+  font-size: 15px;
+  line-height: 1;
+  cursor: grab;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+  user-select: none;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.admin-photo-grid figure:hover .ph-drag,
+.ph-drag:active {
+  opacity: 1;
+}
+
+.ph-drag:hover {
+  color: #111;
+}
+
+.ph-drag:active {
+  cursor: grabbing;
+}
+
+.admin-photo-grid figure.dragging {
+  opacity: 0.45;
+  box-shadow: 0 0 0 2px #18181b;
 }
 
 .admin-photo-grid figure:hover {

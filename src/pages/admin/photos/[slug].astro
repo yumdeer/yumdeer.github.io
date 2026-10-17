@@ -29,16 +29,17 @@ if (!project) return Astro.redirect('/404');
   <div class="admin-photo-grid" id="photo-grid">
     {photos.map((p) => (
       <figure data-id={p.id}>
-        <img src={`/api/media/${r2Key.photoThumb(project.slug, p.slug)}`} alt={p.title} loading="lazy" />
+        <span class="ph-drag" draggable="true" title="拖动调整显示顺序">⠿</span>
+        <img src={`/api/media/${r2Key.photoThumb(project.slug, p.slug)}`} alt={p.title} loading="lazy" draggable="false" />
         <input class="ph-title" value={p.title} placeholder="标题" />
         <div class="admin-photo-tools">
-          <input class="ph-sort" type="number" value={p.sort_order} style="width:3.5em" title="排序" />
-          <button class="btn-save" type="button">存</button>
+          <button class="btn-save" type="button" title="保存标题">存</button>
           <button class="btn-danger btn-del" type="button">删</button>
         </div>
       </figure>
     ))}
   </div>
+  <p class="admin-hint" id="reorder-msg" hidden></p>
   {photos.length === 0 && <p class="admin-hint">还没有照片。</p>}
 </AdminLayout>
 
@@ -119,7 +120,7 @@ if (!project) return Astro.redirect('/404');
     }
   });
 
-  // 标题/排序/删除
+  // 标题保存/删除
   document.getElementById('photo-grid')?.addEventListener('click', async (e) => {
     const btn = e.target as HTMLElement;
     const fig = btn.closest('figure[data-id]');
@@ -134,7 +135,6 @@ if (!project) return Astro.redirect('/404');
           updates: [{
             id,
             title: (fig.querySelector('.ph-title') as HTMLInputElement).value,
-            sort_order: Number((fig.querySelector('.ph-sort') as HTMLInputElement).value),
           }],
         }),
       });
@@ -145,6 +145,60 @@ if (!project) return Astro.redirect('/404');
       if (!confirm('删除这张照片？')) return;
       await fetch(`/api/admin/photos/${id}`, { method: 'DELETE' });
       fig.remove();
+    }
+  });
+
+  // ── 拖拽排序：按住 ⠿ 手柄拖动，实时预览插入位置，松手后按当前
+  //    DOM 顺序批量写回 sort_order（0..n-1），无需手动点保存。
+  const grid = document.getElementById('photo-grid');
+  const reorderMsg = document.getElementById('reorder-msg');
+  let dragging: HTMLElement | null = null;
+
+  grid?.addEventListener('dragstart', (e) => {
+    const handle = (e.target as HTMLElement).closest('.ph-drag');
+    if (!handle) return;
+    dragging = handle.closest('figure');
+    dragging?.classList.add('dragging');
+    e.dataTransfer!.effectAllowed = 'move';
+    try { e.dataTransfer!.setData('text/plain', ''); } catch {} // Firefox 需要
+  });
+
+  grid?.addEventListener('dragover', (e) => {
+    if (!dragging) return;
+    e.preventDefault();
+    e.dataTransfer!.dropEffect = 'move';
+    const target = (e.target as HTMLElement).closest('figure[data-id]');
+    if (!target || target === dragging) return;
+    // grid 多列：按鼠标在目标卡内的纵向位置决定插到前面还是后面
+    const rect = target.getBoundingClientRect();
+    const after = e.clientY - rect.top > rect.height / 2;
+    target.parentNode!.insertBefore(dragging, after ? target.nextSibling : target);
+  });
+
+  grid?.addEventListener('drop', (e) => e.preventDefault());
+
+  grid?.addEventListener('dragend', async () => {
+    if (!dragging) return;
+    dragging.classList.remove('dragging');
+    dragging = null;
+    // 松手即保存：DOM 顺序 = 新的显示顺序
+    const updates = [...grid.querySelectorAll('figure[data-id]')].map((f, i) => ({
+      id: Number((f as HTMLElement).dataset.id),
+      sort_order: i,
+    }));
+    if (!updates.length) return;
+    if (reorderMsg) {
+      reorderMsg.hidden = false;
+      reorderMsg.textContent = '保存新顺序中…';
+    }
+    const r = await fetch('/api/admin/photos', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ updates }),
+    });
+    if (reorderMsg) {
+      reorderMsg.textContent = r.ok ? '顺序已保存 ✓' : '保存失败，请重试';
+      if (r.ok) setTimeout(() => (reorderMsg.hidden = true), 1500);
     }
   });
 </script>
