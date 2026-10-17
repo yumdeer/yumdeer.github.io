@@ -41,8 +41,8 @@ const slides = photos.map((p) => ({
 >
   <div class="project-page">
     <div class="project-head">
-      <h1 data-back title="点击返回">{project.title}{project.year ? ` ${project.year}` : ''}</h1>
-      {project.description && <p class="project-desc">{project.description}</p>}
+      <h1 data-back data-ek-title={project.title} data-ek-year={project.year ?? ''} title="点击返回">{project.title}{project.year ? ` ${project.year}` : ''}</h1>
+      {project.description && <p class="project-desc" data-ek-desc={project.description}>{project.description}</p>}
     </div>
     <Slideshow photos={slides} title={project.title} />
   </div>

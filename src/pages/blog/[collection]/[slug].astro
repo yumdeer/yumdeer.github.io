@@ -25,7 +25,7 @@ const label = ({ photography: '摄影', tech: '技术' })[article.collection] ??
 ---
 
 <Layout title={article.title} description={article.description ?? undefined} activePath="/blog/" theme="dark">
-  <article class="article">
+  <article class="article" data-ek-article={article.slug}>
     <header class="article-header">
       <h1>{article.title}</h1>
       <p class="article-meta">{fmt(article.pub_date)}　{label}</p>

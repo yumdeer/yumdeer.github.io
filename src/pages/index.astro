@@ -1,13 +1,15 @@
 ---
 // 首页 — 精选作品网格（SSR：照片来自 D1，每次请求随机排序）。
+// 登录用户 tile 悬停出现编辑/删除（EditKit 注入），访客无感知。
 import Layout from '../layouts/Layout.astro';
 import { getDB, listAllPhotos, r2Key } from '../lib/db';
 import { GRID_SIZES } from '../lib/photo-sizes';
 
-let all: { slug: string; projectSlug: string; title: string; blur: string | null; w: number; h: number }[] = [];
+let all: { id: number; slug: string; projectSlug: string; title: string; blur: string | null; w: number; h: number }[] = [];
 try {
   const photos = await listAllPhotos(getDB());
   all = photos.map((p) => ({
+    id: p.id,
     slug: p.slug,
     projectSlug: (p as any).project_slug,
     title: p.title,
@@ -27,11 +29,13 @@ try {
 
 <Layout>
   <section class="selected-grid" aria-label="精选作品">
-    {all.map(({ slug, projectSlug, title, blur, w, h }) => (
+    {all.map(({ id, slug, projectSlug, title, blur, w, h }) => (
       <a
         href={`/project/${projectSlug}/`}
         aria-label={title || 'photograph'}
         style={`aspect-ratio:${w || 3} / ${h || 2}`}
+        data-ek-photo-id={id}
+        data-ek-photo-title={title}
       >
         {blur && <img src={blur} alt="" class="grid-blur" aria-hidden="true" />}
         <img

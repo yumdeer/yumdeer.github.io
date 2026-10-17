@@ -271,6 +271,12 @@ const collections = [
     }
   });
 
+  // 前台文章页「✎ 编辑文章」按钮跳转带 ?edit=slug，自动打开对应编辑器
+  const editSlug = new URLSearchParams(location.search).get('edit');
+  if (editSlug) {
+    document.querySelector(`.btn-open[data-slug="${CSS.escape(editSlug)}"]`)?.dispatchEvent(new Event('click', { bubbles: true }));
+  }
+
   // ── 保存（新建或更新） ──────────────────────────────────────────
   editor.addEventListener('submit', async (e) => {
     e.preventDefault();

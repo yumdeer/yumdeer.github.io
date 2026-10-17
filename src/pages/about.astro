@@ -23,8 +23,10 @@ const aboutHtml = renderMarkdown(aboutMd?.trim() ? aboutMd : DEFAULT_ABOUT_MD);
 ---
 
 <Layout title="INFO" description={`艺术家简介 · ${site.nameZh}`} activePath="/about/">
-  <div class="prose-page">
+  <div class="prose-page" data-ek-about>
     <h1>INFO</h1>
     <div class="prose" set:html={aboutHtml} />
+    <!-- EditKit 回填编辑框用：原始 Markdown（HTML 注释不渲染；set:html 避免实体转义） -->
+    <Fragment set:html={`<!--EK_ABOUT_MD_START-->${aboutMd ?? ''}<!--EK_ABOUT_MD_END-->`} />
   </div>
 </Layout>
