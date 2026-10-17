@@ -12,13 +12,16 @@ try {
 } catch {}
 
 // 分类选项：内置两个 + 数据库已有分类（用户可输入新值，保存后自动出现在选项里）
-const collections = [
+// 「（未分类）」固定排最末（__new__ 前）——空值从 Map 去重流程排除后单独追加
+const collections: [string, string][] = [
   ...new Map(
     articles
       .map((a) => a.collection)
       .concat(['photography', 'tech'])
-      .map((c) => [c, collLabel[c] ?? c]),
-  ).entries(),
+      .filter((c) => c)
+      .map((c) => [c, collLabel[c] ?? c] as [string, string]),
+  ),
+  ['', '（未分类）'],
 ];
 ---
 
@@ -32,7 +35,7 @@ const collections = [
         <li>
           <button class="btn-open" type="button" data-slug={a.slug}>
             {a.draft ? '[草稿] ' : ''}{a.title}
-            <span class="a-meta">{collLabel[a.collection] ?? a.collection} · {a.pub_date}</span>
+            <span class="a-meta">{a.collection ? collLabel[a.collection] ?? a.collection : '未分类'} · {a.pub_date}</span>
           </button>
           <button class="btn-danger btn-del" type="button" data-slug={a.slug}>删</button>
         </li>
@@ -126,11 +129,11 @@ const collections = [
     syncCollUI();
   };
 
-  // 删除自定义分类：分类非独立实体，删除 = 该分类下文章全部迁入「摄影随笔」
+  // 删除自定义分类：分类非独立实体，删除 = 该分类下文章全部变为未分类
   collDelBtn.addEventListener('click', async () => {
     const name = collSelect.value;
     if (BUILTIN_COLL.has(name) || name === '__new__' || !name) return;
-    if (!confirm(`删除分类「${name}」？\n该分类下的文章将全部移入「摄影随笔」。`)) return;
+    if (!confirm(`删除分类「${name}」？\n该分类下的文章将全部变为未分类。`)) return;
     const r = await fetch(`/api/admin/collections?name=${encodeURIComponent(name)}`, {
       method: 'DELETE',
     });
@@ -311,7 +314,7 @@ const collections = [
       bodyMd.value = a.body_md;
       v('parseFrontmatter').checked = false;
       previewLink.hidden = false;
-      previewLink.href = `/blog/${a.collection}/${a.slug}/`;
+      previewLink.href = `/blog/${a.collection || 'none'}/${a.slug}/`;
       return;
     }
 
@@ -331,10 +334,11 @@ const collections = [
   // ── 保存（新建或更新） ──────────────────────────────────────────
   editor.addEventListener('submit', async (e) => {
     e.preventDefault();
-    // 分类：选「＋ 新建分类…」时取命名输入框的值（必填）
+    // 分类：选「＋ 新建分类…」时取命名输入框的值（此模式下必填）；
+    // 选「（未分类）」时 collection 为空串 —— 分类非必填，放行
     const collection =
       collSelect.value === '__new__' ? newCollInput.value.trim() : collSelect.value;
-    if (!collection) {
+    if (collSelect.value === '__new__' && !collection) {
       msg.textContent = '请填写新分类名';
       newCollInput.focus();
       return;

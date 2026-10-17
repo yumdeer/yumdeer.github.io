@@ -3,7 +3,7 @@
 import Layout from '../../../layouts/Layout.astro';
 import { getDB, getArticle } from '../../../lib/db';
 import { renderMarkdown } from '../../../lib/markdown';
-import { collLabelOf } from '../../../lib/collections';
+import { collLabelOf, collSlug } from '../../../lib/collections';
 
 const { collection, slug } = Astro.params;
 
@@ -11,7 +11,8 @@ let article: Awaited<ReturnType<typeof getArticle>> = undefined;
 let html = '';
 try {
   article = slug ? await getArticle(getDB(), slug) : undefined;
-  if (article && article.collection !== collection) article = undefined;
+  // URL 分类段须匹配：有分类严格匹配；未分类文章用 'none' 段（/blog/none/<slug>/）
+  if (article && collSlug(article.collection) !== collection) article = undefined;
   if (article) html = renderMarkdown(article.body_md);
 } catch {
   // DB 未初始化
@@ -28,7 +29,7 @@ const fmt = (d: string) => d.replaceAll('-', '.');
   <article class="article" data-ek-article={article.slug}>
     <header class="article-header">
       <h1>{article.title}</h1>
-      <p class="article-meta">{fmt(article.pub_date)}　{collLabelOf(article.collection)}</p>
+      <p class="article-meta">{fmt(article.pub_date)}{article.collection && `　${collLabelOf(article.collection)}`}</p>
     </header>
 
     {article.cover_url && (

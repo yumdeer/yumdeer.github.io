@@ -480,12 +480,15 @@ const { email } = Astro.props;
       t = setTimeout(() => (preview.innerHTML = renderMarkdown(md.value)), 120);
     });
 
-    // 加载当前文章（与后台编辑器同接口）
+    // 加载当前文章（与后台编辑器同接口）；记录原分类，保存时原样传回
+    // （后端对未传 collection 的更新会默认 photography，未分类文章会被误改）
+    let arCollection = 'photography';
     api('/api/admin/articles')
       .then((r) => r.json())
-      .then((list: { slug: string; title: string; description: string | null; body_md: string }[]) => {
+      .then((list: { slug: string; title: string; description: string | null; body_md: string; collection?: string }[]) => {
         const a = list.find((x) => x.slug === slug);
         if (!a) return;
+        arCollection = a.collection ?? '';
         ($('#ek-ar-title') as HTMLInputElement).value = a.title;
         ($('#ek-ar-desc') as HTMLInputElement).value = a.description ?? '';
         md.value = a.body_md;
@@ -532,6 +535,7 @@ const { email } = Astro.props;
           slug,
           title,
           description: ($('#ek-ar-desc') as HTMLInputElement).value || undefined,
+          collection: arCollection,
           bodyMd: md.value,
         }),
       });

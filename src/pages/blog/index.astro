@@ -2,7 +2,7 @@
 // 博客列表 — 文章来自 D1，按日期倒序。暗夜主题。
 import Layout from '../../layouts/Layout.astro';
 import { getDB, listArticles } from '../../lib/db';
-import { collLabelOf } from '../../lib/collections';
+import { collLabelOf, collSlug } from '../../lib/collections';
 
 let posts: {
   slug: string;
@@ -28,10 +28,10 @@ const fmt = (d: string) => d.replaceAll('-', '.');
         {posts.map((post) => (
           <li>
             <time>{fmt(post.pub_date)}</time>
-            <a href={`/blog/${post.collection}/${post.slug}/`}>
+            <a href={`/blog/${collSlug(post.collection)}/${post.slug}/`}>
               {post.draft ? '[草稿] ' : ''}{post.title}
             </a>
-            <span class="post-coll">{collLabelOf(post.collection)}</span>
+            {post.collection && <span class="post-coll">{collLabelOf(post.collection)}</span>}
           </li>
         ))}
       </ul>

@@ -15,10 +15,11 @@ export const POST: APIRoute = async ({ request, locals }) => {
   const body = await request.json().catch(() => null);
   if (!body?.title) return Response.json({ error: '标题必填' }, { status: 400 });
 
-  // 分类：内置 photography/tech 保留（兼容旧数据与路由），也允许自定义（如"生活"）
+  // 分类：内置 photography/tech 保留（兼容旧数据与路由），允许自定义（如"生活"），
+  // 也允许为空（未分类——分类不是必填项）
   const collection = ['photography', 'tech'].includes(body.collection)
     ? body.collection
-    : String(body.collection ?? 'photography').trim().slice(0, 20) || 'photography';
+    : String(body.collection ?? 'photography').trim().slice(0, 20);
 
   // 粘贴整篇带 frontmatter 的 Markdown（可包含 title 等元数据）
   let title = String(body.title);
