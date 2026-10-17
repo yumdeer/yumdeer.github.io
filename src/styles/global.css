@@ -9,6 +9,13 @@
   box-sizing: border-box;
 }
 
+/* hidden 属性必须真正隐藏：组件样式里的 display:flex/grid 会覆盖 UA
+   默认的 [hidden]{display:none}，导致"逻辑隐藏"的层全屏渲染并拦截
+   点击（slide-end / music-popover / ek-modal 三次踩坑，全站兜底）。 */
+[hidden] {
+  display: none !important;
+}
+
 html {
   -webkit-text-size-adjust: 100%;
 }
