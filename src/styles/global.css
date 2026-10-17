@@ -145,6 +145,13 @@ img {
   margin-top: 40px;
 }
 
+/* 「播放器」与 ☀/🌙 主题开关同行 */
+.ambient-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
 .ambient-toggle {
   border: 0;
   padding: 0;
@@ -155,6 +162,24 @@ img {
   letter-spacing: 1px;
   cursor: pointer;
   transition: color 0.2s;
+}
+
+/* 日间/夜间开关：与「播放器」同风格的轻量图标按钮 */
+.theme-toggle {
+  border: 0;
+  padding: 0;
+  background: none;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  color: #999;
+  cursor: pointer;
+  transition: color 0.2s, transform 0.2s;
+}
+
+.theme-toggle:hover {
+  color: #111;
+  transform: scale(1.15);
 }
 
 .ambient-toggle:hover,
@@ -267,6 +292,14 @@ img {
 /* 暗夜主题（随笔版块）*/
 .theme-dark .ambient-toggle {
   color: #6b6b74;
+}
+
+.theme-dark .theme-toggle {
+  color: #6b6b74;
+}
+
+.theme-dark .theme-toggle:hover {
+  color: #ffffff;
 }
 
 .theme-dark .ambient-toggle:hover,

@@ -53,6 +53,19 @@ const grouped = categories.map((cat) => ({
     <ClientRouter />
   </head>
   <body class={theme === 'dark' ? 'theme-dark' : ''}>
+    <script is:inline>
+      // 主题偏好纠正：SSR 按版块默认渲染（随拍日间 / 随笔夜间），
+      // 用户切换过（localStorage 有偏好）则在首屏渲染前覆盖，避免闪烁。
+      // 简报：fd-theme = 'light' | 'dark'，缺省 = 跟随版块默认。
+      (() => {
+        try {
+          const p = localStorage.getItem('fd-theme');
+          if (!p) return;
+          if (p === 'dark') document.body.classList.add('theme-dark');
+          else document.body.classList.remove('theme-dark');
+        } catch {}
+      })();
+    </script>
     <div class="container">
       <button class="menu-toggle" type="button" aria-label="菜单">菜单</button>
 
@@ -94,7 +107,10 @@ const grouped = categories.map((cat) => ({
           </nav>
 
           <div class="ambient">
-            <button class="ambient-toggle" type="button" aria-expanded="false">播放器</button>
+            <div class="ambient-row">
+              <button class="ambient-toggle" type="button" aria-expanded="false">播放器</button>
+              <button class="theme-toggle" id="theme-toggle" type="button" aria-label="切换日间 / 夜间模式" title="切换日间 / 夜间模式">☀</button>
+            </div>
             <div class="ambient-panel" hidden>
               <button class="ambient-close" type="button" aria-label="收起播放器">×</button>
               <p class="ambient-sec-label">音乐</p>
@@ -159,6 +175,35 @@ const grouped = categories.map((cat) => ({
           originTitle = document.title;
         }
       });
+
+      // ── 日间 / 夜间模式切换 ─────────────────────────────────────────
+      // 版块默认：随拍日间、随笔夜间（SSR class）；用户点击 ☀/🌙 后偏好
+      // 存 localStorage（fd-theme），全站覆盖默认。SPA 导航 body 会被
+      // 新文档替换（回到版块默认），after-swap 时重新应用偏好并同步图标。
+      const syncThemeIcon = () => {
+        const btn = document.querySelector('.theme-toggle');
+        if (btn) btn.textContent = document.body.classList.contains('theme-dark') ? '🌙' : '☀';
+      };
+      const applyThemePref = () => {
+        try {
+          const p = localStorage.getItem('fd-theme');
+          if (p === 'dark') document.body.classList.add('theme-dark');
+          else if (p === 'light') document.body.classList.remove('theme-dark');
+        } catch {}
+        syncThemeIcon();
+      };
+      document.addEventListener('astro:after-swap', applyThemePref);
+      document.addEventListener('astro:page-load', () => {
+        syncThemeIcon();
+        document.querySelector('.theme-toggle')?.addEventListener('click', () => {
+          const dark = document.body.classList.toggle('theme-dark');
+          try {
+            localStorage.setItem('fd-theme', dark ? 'dark' : 'light');
+          } catch {}
+          syncThemeIcon();
+        });
+      });
+      applyThemePref();
 
       // 移动端侧栏抽屉（ClientRouter 下每次导航后需重新绑定）
       const initMenu = () => {
