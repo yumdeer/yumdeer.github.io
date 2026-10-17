@@ -854,9 +854,46 @@ img {
   margin: 1.5em 0;
 }
 
+/* 网易云外链播放器：圆角 + 细边框 + 轻阴影，消除生硬白色方块感 */
 .article .prose iframe {
   display: block;
-  margin: 1.5em auto;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: #fff;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.07);
+  overflow: hidden; /* 配合 border-radius 裁切 iframe 直角 */
+}
+
+/* ── 文章书页式双栏：左文字列（播放器置顶）/ 右图片列 ──────────────────
+   正文渲染时已按块拆分（splitArticleBody）：p/h2/ul… → 左列，
+   img → 右列，iframe/audio → 左列顶部。窄屏（<1024px，手机/平板）
+   DOM 顺序自然上下排：播放器+文字在上、图片全宽在下。 */
+@media (min-width: 1024px) {
+  .article {
+    max-width: 1000px;
+  }
+  .article-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(280px, 40%);
+    column-gap: 3em;
+    align-items: start; /* 两列各自顶部对齐，互不撑行高 */
+  }
+  .article .prose-media img {
+    margin: 0 0 1.6em;
+  }
+}
+
+/* 播放器置顶于文字列：靠左贴合书页第一行，不居中悬浮 */
+.article .prose-text > iframe:first-child {
+  margin: 0 0 2.4em;
+}
+
+/* 图片列：间距统一交给块级容器（img 的 p 包裹或裸 img），避免双重 margin */
+.article .prose-media > * {
+  margin: 0 0 1.6em;
+}
+.article .prose-media img {
+  margin: 0;
 }
 
 .article .prose a {
