@@ -52,17 +52,19 @@ const grouped = categories.map((cat) => ({
     <meta property="og:image" content={new URL('/og.jpg', Astro.site).href} />
     <ClientRouter />
   </head>
-  <body class={theme === 'dark' ? 'theme-dark' : ''}>
+  <body class={theme === 'dark' ? 'theme-dark' : ''} data-theme-default={theme}>
     <script is:inline>
-      // 主题偏好纠正：SSR 按版块默认渲染（随拍日间 / 随笔夜间），
-      // 用户切换过（localStorage 有偏好）则在首屏渲染前覆盖，避免闪烁。
-      // 简报：fd-theme = 'light' | 'dark'，缺省 = 跟随版块默认。
+      // 主题偏好纠正：SSR 按版块默认渲染（作品=日间 / 随笔=夜间），
+      // 偏好按版块组分开存（fd-theme-light / fd-theme-dark）——在作品页
+      // 切换不影响文章页的夜间默认。首屏渲染前应用，避免闪烁。
       (() => {
         try {
-          const p = localStorage.getItem('fd-theme');
+          localStorage.removeItem('fd-theme'); // 旧版全局键废弃
+          const body = document.body;
+          const p = localStorage.getItem('fd-theme-' + (body.dataset.themeDefault || 'light'));
           if (!p) return;
-          if (p === 'dark') document.body.classList.add('theme-dark');
-          else document.body.classList.remove('theme-dark');
+          if (p === 'dark') body.classList.add('theme-dark');
+          else body.classList.remove('theme-dark');
         } catch {}
       })();
     </script>
@@ -109,7 +111,22 @@ const grouped = categories.map((cat) => ({
           <div class="ambient">
             <div class="ambient-row">
               <button class="ambient-toggle" type="button" aria-expanded="false">播放器</button>
-              <button class="theme-toggle" id="theme-toggle" type="button" aria-label="切换日间 / 夜间模式" title="切换日间 / 夜间模式">☀</button>
+              <button class="theme-toggle" id="theme-toggle" type="button" aria-label="切换日间 / 夜间模式" title="切换日间 / 夜间模式">
+                <svg class="icon-sun" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="4.5"></circle>
+                  <line x1="12" y1="2" x2="12" y2="4.5"></line>
+                  <line x1="12" y1="19.5" x2="12" y2="22"></line>
+                  <line x1="2" y1="12" x2="4.5" y2="12"></line>
+                  <line x1="19.5" y1="12" x2="22" y2="12"></line>
+                  <line x1="4.6" y1="4.6" x2="6.3" y2="6.3"></line>
+                  <line x1="17.7" y1="17.7" x2="19.4" y2="19.4"></line>
+                  <line x1="4.6" y1="19.4" x2="6.3" y2="17.7"></line>
+                  <line x1="17.7" y1="6.3" x2="19.4" y2="4.6"></line>
+                </svg>
+                <svg class="icon-moon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                </svg>
+              </button>
             </div>
             <div class="ambient-panel" hidden>
               <button class="ambient-close" type="button" aria-label="收起播放器">×</button>
@@ -177,16 +194,19 @@ const grouped = categories.map((cat) => ({
       });
 
       // ── 日间 / 夜间模式切换 ─────────────────────────────────────────
-      // 版块默认：随拍日间、随笔夜间（SSR class）；用户点击 ☀/🌙 后偏好
-      // 存 localStorage（fd-theme），全站覆盖默认。SPA 导航 body 会被
-      // 新文档替换（回到版块默认），after-swap 时重新应用偏好并同步图标。
+      // 版块默认：作品日间、随笔夜间（SSR class + data-theme-default）。
+      // 偏好按版块组分开存：作品组键 fd-theme-light、随笔组键 fd-theme-dark，
+      // 在作品页切换不改变文章页的夜间默认（反之亦然）。
+      // 图标为内联 SVG（sun/moon 线条），用 .is-dark class 切换显示。
+      const themeKey = () => 'fd-theme-' + (document.body.dataset.themeDefault || 'light');
       const syncThemeIcon = () => {
-        const btn = document.querySelector('.theme-toggle');
-        if (btn) btn.textContent = document.body.classList.contains('theme-dark') ? '🌙' : '☀';
+        document.querySelectorAll('.theme-toggle').forEach((b) => {
+          b.classList.toggle('is-dark', document.body.classList.contains('theme-dark'));
+        });
       };
       const applyThemePref = () => {
         try {
-          const p = localStorage.getItem('fd-theme');
+          const p = localStorage.getItem(themeKey());
           if (p === 'dark') document.body.classList.add('theme-dark');
           else if (p === 'light') document.body.classList.remove('theme-dark');
         } catch {}
@@ -198,7 +218,7 @@ const grouped = categories.map((cat) => ({
         document.querySelector('.theme-toggle')?.addEventListener('click', () => {
           const dark = document.body.classList.toggle('theme-dark');
           try {
-            localStorage.setItem('fd-theme', dark ? 'dark' : 'light');
+            localStorage.setItem(themeKey(), dark ? 'dark' : 'light');
           } catch {}
           syncThemeIcon();
         });

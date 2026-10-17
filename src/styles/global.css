@@ -164,22 +164,40 @@ img {
   transition: color 0.2s;
 }
 
-/* 日间/夜间开关：与「播放器」同风格的轻量图标按钮 */
+/* 日间/夜间开关：与「播放器」同风格的轻量图标按钮。
+   图标用内联 SVG + currentColor（☀/🌙 字符会被部分环境强制渲染成
+   彩色 emoji，一黑一黄不统一）；.is-dark 切换 sun/moon 显示 */
 .theme-toggle {
   border: 0;
   padding: 0;
   background: none;
-  font: inherit;
-  font-size: 14px;
-  line-height: 1;
   color: #999;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
   transition: color 0.2s, transform 0.2s;
 }
 
 .theme-toggle:hover {
   color: #111;
   transform: scale(1.15);
+}
+
+.theme-toggle svg {
+  display: block;
+}
+
+.theme-toggle .icon-moon {
+  display: none;
+}
+
+.theme-toggle.is-dark .icon-sun {
+  display: none;
+}
+
+.theme-toggle.is-dark .icon-moon {
+  display: block;
 }
 
 .ambient-toggle:hover,
