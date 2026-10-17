@@ -30,7 +30,13 @@ const { email } = Astro.props;
 </div>
 <div class="ek-toast" id="ek-toast" hidden></div>
 
-<style>
+<style is:global>
+  /* ⚠️ 必须 is:global：弹窗表单（.ek-field/.ek-actions…）、照片悬停工具
+     （.ek-tile-tools/.ek-mini）、✎ 入口（.ek-edit-entry）都是 JS 动态
+     innerHTML/createElement 注入的 DOM，不带 astro scoped 的
+     data-astro-cid 属性 —— scoped 样式匹配不到它们，排版会全部失效。
+     所有类名 ek- 前缀，全局无冲突。 */
+
   /* 工具条：右下角悬浮（左下是播放器面板，避开）。
      默认 display:none —— 管理员登录也不常驻前台（前台必须与访客所见一致），
      只有从后台「前台编辑」进入（?ek=1 → sessionStorage）才 .ek-on 激活显示 */
