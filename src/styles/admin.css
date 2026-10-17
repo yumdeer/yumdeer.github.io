@@ -647,6 +647,12 @@ label.chk input[type='checkbox'] {
   padding: 12px 14px;
 }
 
+/* hidden 属性必须真正隐藏：上面的 display:flex 会覆盖 UA 样式表的
+   [hidden]{display:none}，导致弹层常驻并盖住下方 textarea 编辑区 */
+.music-popover[hidden] {
+  display: none;
+}
+
 .music-popover label {
   display: flex;
   align-items: center;
