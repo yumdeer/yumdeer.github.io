@@ -133,6 +133,13 @@ const { email } = Astro.props;
     place-items: center;
     padding: 20px;
   }
+
+  /* hidden 必须真正隐藏：上面的 display:grid 会覆盖 UA 的
+     [hidden]{display:none}，否则关闭态的空卡片会常驻页面中央
+     （一根白杠）且遮罩拦截整页点击 —— 与 music-popover 同一类坑 */
+  .ek-modal[hidden] {
+    display: none;
+  }
   .ek-card {
     background: #fff;
     border-radius: 14px;
