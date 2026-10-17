@@ -17,6 +17,7 @@ const { email } = Astro.props;
   <button type="button" class="ek-btn" data-ek-act="upload">⬆ 上传照片</button>
   <button type="button" class="ek-btn" data-ek-act="new-project">＋ 新建项目</button>
   <a class="ek-btn" href="/admin/" target="_blank" rel="noopener">完整后台 ↗</a>
+  <button type="button" class="ek-btn" data-ek-act="off">✕ 退出编辑</button>
   <button type="button" class="ek-btn ek-logout" data-ek-act="logout">登出</button>
 </div>
 
@@ -30,13 +31,15 @@ const { email } = Astro.props;
 <div class="ek-toast" id="ek-toast" hidden></div>
 
 <style>
-  /* 工具条：右下角悬浮（左下是播放器面板，避开） */
+  /* 工具条：右下角悬浮（左下是播放器面板，避开）。
+     默认 display:none —— 管理员登录也不常驻前台（前台必须与访客所见一致），
+     只有从后台「前台编辑」进入（?ek=1 → sessionStorage）才 .ek-on 激活显示 */
   .ek-bar {
     position: fixed;
     right: 16px;
     bottom: 16px;
     z-index: 900;
-    display: flex;
+    display: none;
     align-items: center;
     gap: 6px;
     background: rgba(255, 255, 255, 0.9);
@@ -48,6 +51,9 @@ const { email } = Astro.props;
     box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
     font-size: 12px;
     user-select: none;
+  }
+  .ek-bar.ek-on {
+    display: flex;
   }
   .ek-mode {
     font-size: 11px;
@@ -462,6 +468,10 @@ const { email } = Astro.props;
       if (!btn) return;
       const act = (btn as HTMLElement).dataset.ekAct;
 
+      if (act === 'off') {
+        deactivate(); // 退出编辑模式：前台恢复与访客一致（登录态保留）
+      }
+
       if (act === 'logout') {
         await api('/api/admin/auth/logout', { method: 'POST' });
         location.reload();
@@ -538,7 +548,37 @@ const { email } = Astro.props;
     if ((e.target as HTMLElement).closest('[data-close]')) closeModal();
   });
 
+  // ── 激活开关：编辑模式不常驻前台 ─────────────────────────────────────
+  // 管理员从前台看到的一切必须与访客一致；只有从后台「前台编辑」进入
+  // （/?ek=1 写入 sessionStorage）才显示编辑 UI。退出编辑/关标签页即失效。
+  const activate = () => {
+    try {
+      sessionStorage.setItem('ek', '1');
+    } catch {}
+    ($('#ek-bar') as HTMLElement)?.classList.add('ek-on');
+  };
+  const deactivate = () => {
+    try {
+      sessionStorage.removeItem('ek');
+    } catch {}
+    location.reload();
+  };
+  const isActive = () => {
+    try {
+      return sessionStorage.getItem('ek') === '1';
+    } catch {
+      return false;
+    }
+  };
+  // URL ?ek=1：进入编辑模式（后台「前台编辑」链接），随后清掉参数保持 URL 干净
+  if (new URLSearchParams(location.search).get('ek') === '1') {
+    activate();
+    history.replaceState(null, '', location.pathname);
+  }
+
   const init = () => {
+    if (!isActive()) return; // 未激活：前台与访客完全一致，零编辑 UI
+    ($('#ek-bar') as HTMLElement)?.classList.add('ek-on');
     bindBar();
     injectPageControls();
   };
