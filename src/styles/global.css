@@ -62,6 +62,19 @@ img {
   z-index: 100;
   border-right: 1px solid #f0f0f0;
   overflow-y: auto;
+  /* flex 纵向布局：导航在上，"关于 + 播放器 + 页脚"通过 margin-top:auto 沉底 */
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar > * {
+  flex-shrink: 0; /* 内容超出侧栏高度时整体滚动，不被压缩 */
+}
+
+/* 沉底区块：关于导航 + 播放器 + 版权。与上方导航拉开呼吸感 */
+.sidebar-tail {
+  margin-top: auto;
+  padding-top: 48px;
 }
 
 .site-title {
@@ -112,7 +125,7 @@ img {
 }
 
 .sidebar-footer {
-  margin-top: 60px;
+  margin-top: 24px;
   font-size: 11px;
   color: #bbb;
   letter-spacing: 0.5px;

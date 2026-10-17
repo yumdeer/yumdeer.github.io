@@ -74,37 +74,42 @@ const grouped = categories.map((cat) => ({
           </nav>
         ))}
 
-        <nav aria-label="随笔与关于">
+        <nav aria-label="随笔">
           <p class="nav-category">随笔</p>
           <ul class="nav-menu">
             <li><a href="/blog/" class={activePath === '/blog/' ? 'active' : ''}>文章</a></li>
           </ul>
-          <p class="nav-category">关于</p>
-          <ul class="nav-menu">
-            <li><a href="/about/" class={activePath === '/about/' ? 'active' : ''}>{site.name}</a></li>
-          </ul>
         </nav>
 
-        <div class="ambient">
-          <button class="ambient-toggle" type="button" aria-expanded="false">播放器</button>
-          <div class="ambient-panel" hidden>
-            <button class="ambient-close" type="button" aria-label="收起播放器">×</button>
-            <p class="ambient-sec-label">音乐</p>
-            <ul class="ambient-sounds" id="track-list"><li class="ambient-empty">加载中…</li></ul>
-            <p class="ambient-sec-label">环境音</p>
-            <ul class="ambient-sounds">
-              <li><button type="button" data-sound="rain">雨声</button></li>
-              <li><button type="button" data-sound="waves">海浪</button></li>
-              <li><button type="button" data-sound="white">白噪声</button></li>
-              <li><button type="button" data-sound="brown">棕噪声</button></li>
+        <div class="sidebar-tail">
+          <nav aria-label="关于">
+            <p class="nav-category">关于</p>
+            <ul class="nav-menu">
+              <li><a href="/about/" class={activePath === '/about/' ? 'active' : ''}>{site.name}</a></li>
             </ul>
-            <label class="ambient-volume">音量
-              <input type="range" min="0" max="1" step="0.01" value="0.5" />
-            </label>
-          </div>
-        </div>
+          </nav>
 
-        <div class="sidebar-footer">© {new Date().getFullYear()} {site.name}</div>
+          <div class="ambient">
+            <button class="ambient-toggle" type="button" aria-expanded="false">播放器</button>
+            <div class="ambient-panel" hidden>
+              <button class="ambient-close" type="button" aria-label="收起播放器">×</button>
+              <p class="ambient-sec-label">音乐</p>
+              <ul class="ambient-sounds" id="track-list"><li class="ambient-empty">加载中…</li></ul>
+              <p class="ambient-sec-label">环境音</p>
+              <ul class="ambient-sounds">
+                <li><button type="button" data-sound="rain">雨声</button></li>
+                <li><button type="button" data-sound="waves">海浪</button></li>
+                <li><button type="button" data-sound="white">白噪声</button></li>
+                <li><button type="button" data-sound="brown">棕噪声</button></li>
+              </ul>
+              <label class="ambient-volume">音量
+                <input type="range" min="0" max="1" step="0.01" value="0.5" />
+              </label>
+            </div>
+          </div>
+
+          <div class="sidebar-footer">© {new Date().getFullYear()} {site.name}</div>
+        </div>
       </aside>
 
       <main class="content">
