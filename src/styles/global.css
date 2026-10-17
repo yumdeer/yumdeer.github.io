@@ -694,6 +694,9 @@ img {
   font-size: 15px;
   cursor: pointer;
   transition: background 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .slide-ctrl button:hover {

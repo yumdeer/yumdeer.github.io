@@ -61,7 +61,12 @@ const { photos, title } = Astro.props;
 
     <div class="slide-ctrl" data-ctrl hidden>
       <button type="button" data-ctrl-prev aria-label="上一张">‹</button>
-      <button type="button" data-ctrl-toggle aria-label="暂停 / 播放">⏸</button>
+      <button type="button" data-ctrl-toggle aria-label="暂停 / 播放">
+        <!-- ⏸/▶ 字符在部分浏览器（Win Chrome/Edge）被强制渲染成彩色 emoji
+             （蓝底），与透明文字按钮风格不一致；改用 currentColor 的 SVG -->
+        <svg data-ctrl-icon-pause width="11" height="12" viewBox="0 0 11 12" fill="currentColor" aria-hidden="true"><rect x="1" width="3" height="12" rx="1" /><rect x="7" width="3" height="12" rx="1" /></svg>
+        <svg data-ctrl-icon-play width="11" height="12" viewBox="0 0 11 12" fill="currentColor" aria-hidden="true" hidden><path d="M1.6 1.1v9.8c0 .9 1 1.4 1.7 1L10 7a1.2 1.2 0 0 0 0-2L3.3.1c-.7-.4-1.7 0-1.7 1z" /></svg>
+      </button>
       <button type="button" data-ctrl-next aria-label="下一张">›</button>
       <span data-ctrl-counter></span>
       <button type="button" data-ctrl-exit aria-label="退出放映">✕</button>
@@ -97,6 +102,15 @@ const { photos, title } = Astro.props;
     const ctrl = root.querySelector('[data-ctrl]') as HTMLElement;
     const ctrlCounter = root.querySelector('[data-ctrl-counter]') as HTMLElement;
     const ctrlToggle = root.querySelector('[data-ctrl-toggle]') as HTMLButtonElement;
+    const iconPause = root.querySelector('[data-ctrl-icon-pause]') as SVGElement;
+    const iconPlay = root.querySelector('[data-ctrl-icon-play]') as SVGElement;
+    // 暂停/播放图标切换（SVG，避免 emoji 字符被部分浏览器渲染成蓝底彩色）。
+    // 注意：SVGElement 没有 hidden IDL 属性（HTML 元素专属），必须用
+    // toggleAttribute 写 HTML attribute，CSS [hidden] 才会生效。
+    const setToggleIcon = (playing: boolean) => {
+      iconPause.toggleAttribute('hidden', !playing);
+      iconPlay.toggleAttribute('hidden', playing);
+    };
     if (!imgs.length) return;
 
     let current = 0;
@@ -160,7 +174,7 @@ const { photos, title } = Astro.props;
       root.classList.add('is-presenting');
       ctrl.hidden = false;
       autoWanted = true;
-      ctrlToggle.textContent = '⏸';
+      setToggleIcon(true);
       // 放映永远从第一张开始：停在末张（或 END 画面）时进入放映，
       // 否则只放 1 张、4 秒后就 END，与"整目录放映"的预期不符
       show(0);
@@ -188,7 +202,7 @@ const { photos, title } = Astro.props;
     root.querySelector('[data-ctrl-exit]')?.addEventListener('click', exitPresent);
     ctrlToggle.addEventListener('click', () => {
       autoWanted = !autoWanted;
-      ctrlToggle.textContent = autoWanted ? '⏸' : '▶';
+      setToggleIcon(autoWanted);
       if (autoWanted) startAuto();
       else stopAuto();
     });
@@ -235,7 +249,7 @@ const { photos, title } = Astro.props;
       if (e.key === ' ' && presenting) {
         e.preventDefault();
         autoWanted = !autoWanted;
-        ctrlToggle.textContent = autoWanted ? '⏸' : '▶';
+        setToggleIcon(autoWanted);
         if (autoWanted) startAuto();
         else stopAuto();
       }
