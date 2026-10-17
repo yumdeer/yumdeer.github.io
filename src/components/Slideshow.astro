@@ -71,12 +71,14 @@ const { photos, title } = Astro.props;
 
 <script>
   // 幻灯片交互（ClientRouter 下每次导航后重新绑定；先清理旧键盘监听避免叠加）
+  import { navigate } from 'astro:transitions/client';
+
   let slideshowKeys: ((e: KeyboardEvent) => void) | null = null;
 
-  const goBack = () => {
-    if (history.length > 1) history.back();
-    else location.assign('/');
-  };
+  // 关闭查看器 → 回随拍照片墙（首页）。
+  // 不用 history.back()：从关于/文章等入口进入时 back 会回到那些页面，
+  // 而"关闭相册"的直觉是回到照片流；navigate 保持 SPA 无刷新体验。
+  const goBack = () => navigate('/');
 
   const initSlideshow = () => {
     if (slideshowKeys) {
