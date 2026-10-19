@@ -25,8 +25,9 @@ export const site = {
 // 社交/外部链接 — 同步自旧 hexo 站（个人介绍页"撩一撩"区块），
 // 在艺术家简介页（INFO）默认文案中引用。
 export const social = {
-  github: 'https://github.com/Jeffchal',
+  github: 'https://github.com/yumdeer',
   xiaohongshu: 'https://xhslink.cn/o/99HWCWNGopf',
-  wechat: 'https://mp.weixin.qq.com/mp/profile_ext?action=home&__biz=MzUyNDU0MDY2Ng==#wechat_redirect',
-  music: 'https://music.163.com/#/user/home?id=369837843',
+  // 网易云个人主页：旧版 music.163.com/#/user/home 网页端已 404，
+  // 现用移动版入口（SSR 渲染，桌面浏览器可正常打开）
+  music: 'https://y.music.163.com/m/user?id=369837843',
 };
