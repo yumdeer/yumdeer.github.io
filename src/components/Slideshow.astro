@@ -118,18 +118,36 @@ const { photos, title } = Astro.props;
 
     // ── 放映模式状态 ──
     let presenting = false;
-    let autoTimer: ReturnType<typeof setInterval> | null = null;
+    let autoTimer: ReturnType<typeof setTimeout> | null = null;
+    let autoGen = 0; // 竞态令牌：切换/暂停/退出时作废挂起的"等加载"回调
     let autoWanted = true; // 用户是否想要自动播放（⏸ 切换）
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
     const stopAuto = () => {
-      if (autoTimer) clearInterval(autoTimer);
+      autoGen++;
+      if (autoTimer) clearTimeout(autoTimer);
       autoTimer = null;
     };
+    // 停留 4s 从「图片真正加载完成」起算：慢网下大图还没显示就被
+    // 固定 setInterval 切走（等于没看清就跳过）。
     const startAuto = () => {
       stopAuto();
       if (!presenting || !autoWanted) return;
-      autoTimer = setInterval(() => next(), 4000);
+      const gen = autoGen;
+      const img = imgs[current];
+      const beginTimer = () => {
+        if (gen !== autoGen) return; // 等待期间已切换/暂停 → 作废
+        autoTimer = setTimeout(() => {
+          if (gen !== autoGen) return;
+          next();
+        }, 4000);
+      };
+      if (img.complete && img.naturalWidth > 0) beginTimer();
+      else {
+        // 未加载完：等 load 再计时；error 也放行（坏图不该卡死放映）
+        img.addEventListener('load', beginTimer, { once: true });
+        img.addEventListener('error', beginTimer, { once: true });
+      }
     };
 
     const show = (i: number) => {
