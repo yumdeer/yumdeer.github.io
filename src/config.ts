@@ -30,4 +30,5 @@ export const social = {
   // 网易云个人主页：旧版 music.163.com/#/user/home 网页端已 404，
   // 现用移动版入口（SSR 渲染，桌面浏览器可正常打开）
   music: 'https://y.music.163.com/m/user?id=369837843',
+  email: 'mailto:875205504@qq.com',
 };

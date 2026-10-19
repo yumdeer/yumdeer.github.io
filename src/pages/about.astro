@@ -16,7 +16,7 @@ const DEFAULT_ABOUT_MD = `我是 ${site.nameZh}（Jeff.Chal），It's Habitat wi
 最后形同陌路的两人，到现在你是否还想起。
 虽隔千里，任愿你有好运触手可及。
 
-[GitHub](${social.github}) · [小红书](${social.xiaohongshu}) · [网易云音乐](${social.music})`;
+[GitHub](${social.github}) · [小红书](${social.xiaohongshu}) · [网易云音乐](${social.music}) · [875205504@qq.com](${social.email})`;
 
 let aboutMd: string | null = null;
 try {
@@ -32,6 +32,7 @@ const ICONS: [RegExp, string][] = [
   [/github\.com/i, '<path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.438 9.8 8.205 11.387.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61-.546-1.387-1.333-1.756-1.333-1.756-1.09-.745.082-.73.082-.73 1.205.084 1.84 1.237 1.84 1.237 1.07 1.834 2.807 1.304 3.492.997.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12c0-6.627-5.373-12-12-12z"/>'],
   [/xhslink\.cn|xiaohongshu\.com/i, '<rect x="4" y="4" width="16" height="16" rx="4" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M12 8.8v6.4M9.2 10.6 7.6 13m7.2-2.4L16.4 13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>'],
   [/music\.163\.com/i, '<path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/>'],
+  [/^mailto:/i, '<rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="m4.5 7.5 7.5 5.5 7.5-5.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>'],
 ];
 const withIcons = (html: string) =>
   // 匹配整个 <a>（renderMarkdown 的外链带 target/rel 属性，只截到 href 闭引号
@@ -40,7 +41,9 @@ const withIcons = (html: string) =>
     .replace(/<a href="([^"]+)"[^>]*>([^<]*)<\/a>/g, (m, href: string, text: string) => {
       const icon = ICONS.find(([re]) => re.test(href));
       if (!icon) return m;
-      return `<a href="${href}" class="social-link" target="_blank" rel="noopener noreferrer" title="${text}"><svg viewBox="0 0 24 24" aria-hidden="true">${icon[1]}</svg></a>`;
+      // mailto 不加 target=_blank（新标签页唤起邮件客户端会残留空白页）
+      const attrs = /^mailto:/i.test(href) ? '' : ' target="_blank" rel="noopener noreferrer"';
+      return `<a href="${href}" class="social-link"${attrs} title="${text}"><svg viewBox="0 0 24 24" aria-hidden="true">${icon[1]}</svg></a>`;
     })
     // 图标↔图标之间的「·」分隔符已无意义，清掉，间距交给 CSS
     .replace(/(<\/svg><\/a>)(?: · )(?=<a href="[^"]+" class="social-link")/g, '$1');
