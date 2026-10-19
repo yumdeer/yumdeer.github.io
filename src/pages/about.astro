@@ -35,11 +35,16 @@ const ICONS: [RegExp, string][] = [
   [/music\.163\.com/i, '<path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/>'],
 ];
 const withIcons = (html: string) =>
-  html.replace(/<a href="([^"]+)"/g, (m, href: string) => {
-    const icon = ICONS.find(([re]) => re.test(href));
-    if (!icon) return m;
-    return `<a href="${href}" class="social-link"><svg viewBox="0 0 24 24" aria-hidden="true">${icon[1]}</svg>`;
-  });
+  // 匹配整个 <a>（renderMarkdown 的外链带 target/rel 属性，只截到 href 闭引号
+  // 会把残留属性泄漏成可见文本）。命中域名的链接：只留图标，文字进 title 悬停提示。
+  html
+    .replace(/<a href="([^"]+)"[^>]*>([^<]*)<\/a>/g, (m, href: string, text: string) => {
+      const icon = ICONS.find(([re]) => re.test(href));
+      if (!icon) return m;
+      return `<a href="${href}" class="social-link" target="_blank" rel="noopener noreferrer" title="${text}"><svg viewBox="0 0 24 24" aria-hidden="true">${icon[1]}</svg></a>`;
+    })
+    // 图标↔图标之间的「·」分隔符已无意义，清掉，间距交给 CSS
+    .replace(/(<\/svg><\/a>)(?: · )(?=<a href="[^"]+" class="social-link")/g, '$1');
 
 const aboutHtml = withIcons(renderMarkdown(aboutMd?.trim() ? aboutMd : DEFAULT_ABOUT_MD));
 ---

@@ -834,16 +834,16 @@ img {
   line-height: 2;
 }
 
-/* 社交链接：品牌小图标 + 文字（fill=currentColor 随主题联动） */
+/* 社交链接：仅品牌小图标（fill=currentColor 随主题联动，名称进 title 悬停） */
 .prose-page a.social-link {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  margin: 0 7px;
 }
 
 .prose-page a.social-link svg {
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   flex: 0 0 auto;
   fill: currentColor;
 }
