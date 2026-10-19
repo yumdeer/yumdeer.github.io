@@ -31,7 +31,7 @@ try {
         <tr data-slug={p.slug}>
           <td><input class="p-sort" type="number" value={p.sort_order} style="width:4em" /></td>
           <td><input class="p-title" value={p.title} /></td>
-          <td><code>{p.slug}</code></td>
+          <td><input class="p-slug" value={p.slug} style="width:9em" title="URL 路径名，修改后照片存储路径自动迁移" /></td>
           <td><input class="p-category" value={p.category} style="width:5em" /></td>
           <td><input class="p-year" value={p.year ?? ''} style="width:4em" /></td>
           <td class="admin-actions">
@@ -72,18 +72,27 @@ try {
     const slug = tr.dataset.slug!;
 
     if (btn.classList.contains('btn-save')) {
+      const newSlug = (tr.querySelector('.p-slug') as HTMLInputElement).value.trim();
       const r = await fetch(`/api/admin/projects/${slug}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
+          slug: newSlug,
           title: (tr.querySelector('.p-title') as HTMLInputElement).value,
           category: (tr.querySelector('.p-category') as HTMLInputElement).value,
           year: (tr.querySelector('.p-year') as HTMLInputElement).value,
           sort_order: Number((tr.querySelector('.p-sort') as HTMLInputElement).value),
         }),
       });
-      btn.textContent = r.ok ? '已保存' : '失败';
-      setTimeout(() => (btn.textContent = '保存'), 1200);
+      if (!r.ok) {
+        alert((await r.json()).error || '保存失败');
+        return;
+      }
+      if (newSlug !== slug) location.reload(); // slug 变了：行标识与链接全部失效，刷新重取
+      else {
+        btn.textContent = '已保存';
+        setTimeout(() => (btn.textContent = '保存'), 1200);
+      }
     }
 
     if (btn.classList.contains('btn-del')) {

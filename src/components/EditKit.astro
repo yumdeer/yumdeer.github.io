@@ -603,6 +603,7 @@ const { email } = Astro.props;
         const y = head.querySelector('p')?.dataset.ekYear || '';
         openModal('编辑项目', `
           <label class="ek-field">标题<input id="ek-pj-title" value="${t.replace(/"/g, '&quot;')}" /></label>
+          <label class="ek-field">slug（URL 路径名，改后照片存储路径自动迁移）<input id="ek-pj-slug" value="${projSlug}" /></label>
           <label class="ek-field">年份<input id="ek-pj-year" value="${y}" placeholder="2025" /></label>
           <label class="ek-field">描述<textarea id="ek-pj-desc" rows="3">${d}</textarea></label>
           <div class="ek-actions">
@@ -611,15 +612,19 @@ const { email } = Astro.props;
             <button type="button" class="ek-primary" id="ek-pj-save">保存</button>
           </div>`);
         $('#ek-pj-save')!.addEventListener('click', async () => {
+          const newSlug = ($('#ek-pj-slug') as HTMLInputElement).value.trim();
           await api(`/api/admin/projects/${projSlug}`, {
             method: 'PUT',
             body: JSON.stringify({
+              slug: newSlug,
               title: ($('#ek-pj-title') as HTMLInputElement).value,
               year: ($('#ek-pj-year') as HTMLInputElement).value,
               description: ($('#ek-pj-desc') as HTMLTextAreaElement).value,
             }),
           });
-          location.reload();
+          // slug 变了 URL 就变了：跳到新地址，否则原地刷新
+          if (newSlug && newSlug !== projSlug) location.replace(`/project/${newSlug}/`);
+          else location.reload();
         });
         $('#ek-pj-del')!.addEventListener('click', async () => {
           if (!confirm(`删除整个项目（含全部照片）？不可恢复！`)) return;
