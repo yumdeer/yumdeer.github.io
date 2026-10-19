@@ -541,6 +541,28 @@ label.chk input[type='checkbox'] {
   background: rgba(24, 24, 27, 0.14);
 }
 
+/* 音乐页「设为默认」按钮：当前默认行显示为强调态 */
+.btn-default {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  border: 0;
+  border-radius: 7px;
+  padding: 5px 12px;
+  background: rgba(24, 24, 27, 0.07);
+  color: #18181b;
+  cursor: pointer;
+}
+
+.btn-default:hover {
+  background: rgba(24, 24, 27, 0.14);
+}
+
+.btn-default[data-default='1'] {
+  background: #18181b;
+  color: #fff;
+}
+
 .ph-move-sel {
   flex: 1;
   min-width: 0;

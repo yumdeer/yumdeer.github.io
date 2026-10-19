@@ -130,7 +130,10 @@ const grouped = categories.map((cat) => ({
             </div>
             <div class="ambient-panel" hidden>
               <button class="ambient-close" type="button" aria-label="收起播放器">×</button>
-              <p class="ambient-sec-label">音乐</p>
+              <div class="ambient-sec-row">
+                <p class="ambient-sec-label">音乐</p>
+                <button type="button" class="play-mode-btn" id="play-mode" title="切换顺序 / 随机播放">顺序</button>
+              </div>
               <ul class="ambient-sounds" id="track-list"><li class="ambient-empty">加载中…</li></ul>
               <p class="ambient-sec-label">环境音</p>
               <ul class="ambient-sounds">
@@ -401,11 +404,17 @@ const grouped = categories.map((cat) => ({
       (window as any).__ambient = engine; // 调试/验证入口
 
       // 音乐播放器（模块级单例，切页持续播放）
+      // mode：seq = 顺序连播（列表循环）| shuffle = 随机连播（整轮洗牌，不重复）
+      // defaultSlug：后台设置的默认曲目，首次打开面板自动播（会话内只一次）
       const player = {
         audio: null as HTMLAudioElement | null,
         current: null as string | null,
         tracks: [] as { slug: string; title: string; artist: string; url: string }[],
         loaded: false,
+        mode: 'seq' as 'seq' | 'shuffle',
+        defaultSlug: null as string | null,
+        autoplayDone: false,
+        queue: [] as string[], // shuffle 待播队列（一轮洗牌）
 
         ensure(): HTMLAudioElement {
           if (!this.audio) {
@@ -419,7 +428,11 @@ const grouped = categories.map((cat) => ({
           if (this.loaded) return;
           try {
             const res = await fetch('/api/tracks');
-            this.tracks = res.ok ? await res.json() : [];
+            if (res.ok) {
+              const data = await res.json();
+              this.tracks = data.tracks ?? [];
+              this.defaultSlug = data.default ?? null;
+            }
           } catch {
             this.tracks = [];
           }
@@ -435,7 +448,50 @@ const grouped = categories.map((cat) => ({
             a.src = url;
             void a.play();
             this.current = slug;
+            // 手动点歌：随机队列里去掉它（避免紧接着随机又播同一首）
+            if (this.mode === 'shuffle') this.queue = this.queue.filter((s) => s !== slug);
           }
+        },
+
+        // ended 后按模式自动连播
+        onEnded() {
+          if (this.tracks.length < 2) {
+            this.current = null;
+            return;
+          }
+          const next = this.pickNext();
+          if (next) {
+            this.current = next.slug;
+            this.ensure().src = next.url;
+            void this.ensure().play();
+          } else {
+            this.current = null;
+          }
+        },
+
+        pickNext(): { slug: string; url: string } | null {
+          if (this.mode === 'seq') {
+            const i = this.tracks.findIndex((t) => t.slug === this.current);
+            return this.tracks[(i + 1) % this.tracks.length];
+          }
+          // shuffle：队列空了重新洗一整轮（排除刚播完的），保证一轮内不重复
+          if (!this.queue.length) {
+            this.queue = this.tracks.map((t) => t.slug).filter((s) => s !== this.current);
+            for (let i = this.queue.length - 1; i > 0; i--) {
+              const j = Math.floor(Math.random() * (i + 1));
+              [this.queue[i], this.queue[j]] = [this.queue[j], this.queue[i]];
+            }
+          }
+          const slug = this.queue.shift();
+          return this.tracks.find((t) => t.slug === slug) ?? null;
+        },
+
+        setMode(m: 'seq' | 'shuffle') {
+          this.mode = m;
+          this.queue = [];
+          try {
+            localStorage.setItem('fd-player-mode', m);
+          } catch {}
         },
 
         stop() {
@@ -447,6 +503,10 @@ const grouped = categories.map((cat) => ({
           if (this.audio) this.audio.volume = v;
         },
       };
+      try {
+        const m = localStorage.getItem('fd-player-mode');
+        if (m === 'shuffle' || m === 'seq') player.mode = m;
+      } catch {}
 
       (window as any).__player = player;
 
@@ -467,10 +527,9 @@ const grouped = categories.map((cat) => ({
           btn.type = 'button';
           btn.dataset.track = t.slug;
           btn.textContent = t.artist ? `${t.title} · ${t.artist}` : t.title;
-          const dur = fmtTime(
-            (player.tracks.find((x) => x.slug === t.slug) as any).duration ?? 0,
-          );
+          const dur = fmtTime((t as any).duration ?? 0);
           if (dur) btn.textContent += ` (${dur})`;
+          if (t.slug === player.defaultSlug) btn.textContent = `★ ${btn.textContent}`;
           btn.addEventListener('click', () => {
             player.play(t.slug, t.url);
             syncPanel();
@@ -478,8 +537,11 @@ const grouped = categories.map((cat) => ({
           li.appendChild(btn);
           list.appendChild(li);
         }
-        // 播放中曲目标记（audio ended 后自动清除）
-        player.ensure().onended = () => { player.current = null; syncPanel(); };
+        // 播完按模式自动连播（顺序/随机）
+        player.ensure().onended = () => {
+          player.onEnded();
+          syncPanel();
+        };
       };
 
       const syncPanel = () => {
@@ -501,19 +563,47 @@ const grouped = categories.map((cat) => ({
         }
       };
 
+      // 首次打开面板自动播默认曲目（点「播放器」是用户手势，允许出声；
+      // 会话内只触发一次，用户手动停了再开面板不会强行复活）
+      const maybeAutoplayDefault = () => {
+        if (player.autoplayDone || player.current || engine.current) return;
+        const t = player.tracks.find((x) => x.slug === player.defaultSlug);
+        if (!t) return;
+        player.autoplayDone = true;
+        player.play(t.slug, t.url);
+        syncPanel();
+      };
+
       const initAmbient = async () => {
         const toggle = document.querySelector('.ambient-toggle') as HTMLElement | null;
         const panel = document.querySelector('.ambient-panel') as HTMLElement | null;
         const vol = document.querySelector('.ambient-volume input') as HTMLInputElement | null;
+        const modeBtn = document.getElementById('play-mode') as HTMLButtonElement | null;
         if (!toggle || !panel) return;
+
+        const syncModeBtn = () => {
+          if (modeBtn) modeBtn.textContent = player.mode === 'shuffle' ? '随机' : '顺序';
+        };
+        syncModeBtn();
 
         toggle.addEventListener('click', (e) => {
           e.stopPropagation();
           panel.hidden = !panel.hidden;
           toggle.setAttribute('aria-expanded', String(!panel.hidden));
           if (!panel.hidden && !player.loaded) {
-            void player.load().then(renderTracks);
+            void player.load().then(() => {
+              renderTracks();
+              maybeAutoplayDefault();
+            });
+          } else if (!panel.hidden) {
+            maybeAutoplayDefault();
           }
+        });
+
+        // 顺序 / 随机连播切换（偏好持久化，重开面板保持）
+        modeBtn?.addEventListener('click', () => {
+          player.setMode(player.mode === 'seq' ? 'shuffle' : 'seq');
+          syncModeBtn();
         });
 
         // 面板右上角 ×：面板 fixed 定位会盖住侧栏底部的播放器开关，必须自带关闭入口

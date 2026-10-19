@@ -1,17 +1,21 @@
 ---
-// /admin/music — 曲目管理：上传 mp3（自动读时长）/ 删除
+// /admin/music — 曲目管理：上传 mp3（自动读时长）/ 设默认曲目 / 删除
 import AdminLayout from '../../layouts/AdminLayout.astro';
-import { getDB, listTracks } from '../../lib/db';
+import { getDB, getSetting, listTracks } from '../../lib/db';
 
 let tracks: Awaited<ReturnType<typeof listTracks>> = [];
+let defaultSlug: string | null = null;
 try {
-  tracks = await listTracks(getDB());
+  const db = getDB();
+  tracks = await listTracks(db);
+  const d = (await getSetting(db, 'default_track')) || null;
+  defaultSlug = d && tracks.some((t) => t.slug === d) ? d : null;
 } catch {}
 ---
 
 <AdminLayout title="音乐">
   <h1>音乐</h1>
-  <p class="admin-hint">上传的曲目出现在全站播放器的「音乐」区（侧栏底部）。环境音（雨声/海浪等）为实时合成，无需上传。</p>
+  <p class="admin-hint">上传的曲目出现在全站播放器的「音乐」区（侧栏底部）。环境音（雨声/海浪等）为实时合成，无需上传。「默认」= 访客打开播放器时自动播放的曲目。</p>
 
   <form class="admin-form" id="music-form">
     <label class="admin-file-label">
@@ -36,6 +40,9 @@ try {
           <td>{Math.floor(t.duration_sec / 60)}:{String(t.duration_sec % 60).padStart(2, '0')}</td>
           <td class="admin-actions">
             <audio controls preload="none" style="height:2em" src={`/api/media/audio/${t.slug}.mp3`}></audio>
+            <button class="btn-default btn-set-default" type="button" data-default={t.slug === defaultSlug ? '1' : '0'}>
+              {t.slug === defaultSlug ? '默认 ✓' : '设为默认'}
+            </button>
             <button class="btn-danger btn-del" type="button">删除</button>
           </td>
         </tr>
@@ -98,13 +105,28 @@ try {
     }
   });
 
-  // 删除
+  // 删除 / 设默认（再点一次取消）
   document.getElementById('tracks-table')?.addEventListener('click', async (e) => {
     const btn = e.target as HTMLElement;
-    if (!btn.classList.contains('btn-del')) return;
-    const slug = btn.closest('tr[data-slug]')!.dataset.slug!;
-    if (!confirm(`删除曲目「${slug}」？`)) return;
-    await fetch(`/api/admin/tracks/${slug}`, { method: 'DELETE' });
-    location.reload();
+    const tr = btn.closest('tr[data-slug]');
+    if (!tr) return;
+    const slug = tr.dataset.slug!;
+
+    if (btn.classList.contains('btn-del')) {
+      if (!confirm(`删除曲目「${slug}」？`)) return;
+      await fetch(`/api/admin/tracks/${slug}`, { method: 'DELETE' });
+      location.reload();
+    }
+    if (btn.classList.contains('btn-set-default')) {
+      const isDefault = btn.dataset.default === '1';
+      if (isDefault && !confirm('取消默认曲目？')) return;
+      const r = await fetch('/api/admin/tracks', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ default: isDefault ? null : slug }),
+      });
+      if (!r.ok) alert((await r.json().catch(() => ({}))).error || '操作失败');
+      location.reload();
+    }
   });
 </script>
