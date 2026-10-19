@@ -2,13 +2,7 @@
 //  body: { name, title, artist?, durationSec, audioB64 }
 import type { APIRoute } from 'astro';
 import { getDB, getR2, listTracks, r2Key } from '../../../lib/db';
-
-function b64ToBuf(b64: string): ArrayBuffer {
-  const bin = atob(b64.includes(',') ? b64.split(',')[1] : b64);
-  const buf = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
-  return buf.buffer;
-}
+import { b64ToBuf } from '../../../lib/b64';
 
 const slugify = (name: string) =>
   name.replace(/\.[^.]+$/, '').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'track';
@@ -29,7 +23,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
   let base = slug, n = 1;
   while (await db.prepare('SELECT 1 FROM tracks WHERE slug = ?').bind(slug).first()) slug = `${base}-${n++}`;
 
-  await r2.put(r2Key.audio(slug), b64ToBuf(body.audioB64), {
+  await r2.put(r2Key.audio(slug), await b64ToBuf(body.audioB64), {
     httpMetadata: { 'content-type': 'audio/mpeg' },
   });
 

@@ -3,13 +3,7 @@
 // /api/admin/photos?reorder — PUT 批量更新排序/标题：{ updates: [{id, title?, sort_order?}] }
 import type { APIRoute } from 'astro';
 import { getDB, getR2, getProject, listPhotos, r2Key } from '../../../lib/db';
-
-function b64ToBuf(b64: string): ArrayBuffer {
-  const bin = atob(b64.includes(',') ? b64.split(',')[1] : b64);
-  const buf = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
-  return buf.buffer;
-}
+import { b64ToBuf } from '../../../lib/b64';
 
 const slugify = (name: string) =>
   name.replace(/\.[^.]+$/, '').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'photo';
@@ -43,8 +37,8 @@ export const POST: APIRoute = async ({ request, locals }) => {
     existing.add(slug);
 
     const meta = { 'content-type': 'image/webp' };
-    await r2.put(r2Key.photoFull(proj.slug, slug), b64ToBuf(p.fullB64), { httpMetadata: meta });
-    await r2.put(r2Key.photoThumb(proj.slug, slug), b64ToBuf(p.thumbB64), { httpMetadata: meta });
+    await r2.put(r2Key.photoFull(proj.slug, slug), await b64ToBuf(p.fullB64), { httpMetadata: meta });
+    await r2.put(r2Key.photoThumb(proj.slug, slug), await b64ToBuf(p.thumbB64), { httpMetadata: meta });
 
     await db
       .prepare(

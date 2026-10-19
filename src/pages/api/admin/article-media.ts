@@ -4,13 +4,7 @@
 // 图片由浏览器端压缩为 webp base64；音频为 mp3 base64（与曲目上传同链路）。
 import type { APIRoute } from 'astro';
 import { getR2, r2Key } from '../../../lib/db';
-
-function b64ToBuf(b64: string): ArrayBuffer {
-  const bin = atob(b64.includes(',') ? b64.split(',')[1] : b64);
-  const buf = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
-  return buf.buffer;
-}
+import { b64ToBuf } from '../../../lib/b64';
 
 const slugify = (name: string) =>
   name.replace(/\.[^.]+$/, '').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'media';
@@ -24,7 +18,7 @@ export const POST: APIRoute = async ({ request }) => {
 
   if (body.kind === 'image') {
     const r2 = getR2();
-    await r2.put(r2Key.articleImage(name), b64ToBuf(body.b64), {
+    await r2.put(r2Key.articleImage(name), await b64ToBuf(body.b64), {
       httpMetadata: { 'content-type': 'image/webp' },
     });
     return Response.json({ url: `/api/media/${r2Key.articleImage(name)}` });
@@ -32,7 +26,7 @@ export const POST: APIRoute = async ({ request }) => {
 
   if (body.kind === 'audio') {
     const r2 = getR2();
-    await r2.put(r2Key.articleAudio(name), b64ToBuf(body.b64), {
+    await r2.put(r2Key.articleAudio(name), await b64ToBuf(body.b64), {
       httpMetadata: { 'content-type': 'audio/mpeg' },
     });
     return Response.json({ url: `/api/media/${r2Key.articleAudio(name)}` });
