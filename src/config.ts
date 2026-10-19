@@ -22,11 +22,11 @@ export const site = {
 
 // 侧栏导航由 Layout.astro 根据项目数据自动生成（作品 / 随笔 / 关于）。
 
-// Social / external links shown in the sidebar and on the contact page. Replace
-// the placeholders with your own. If you drop or add one, also update the
-// matching <Icon> in Sidebar.astro and the list in Contact.astro.
+// 社交/外部链接 — 同步自旧 hexo 站（个人介绍页"撩一撩"区块），
+// 在艺术家简介页（INFO）默认文案中引用。
 export const social = {
-  instagram: 'https://www.instagram.com/yumdeer',
-  linkedin: 'https://www.linkedin.com/in/yumdeer',
-  github: 'https://github.com/yumdeer',
+  github: 'https://github.com/Jeffchal',
+  csdn: 'https://me.csdn.net/weixin_40539125',
+  wechat: 'https://mp.weixin.qq.com/mp/profile_ext?action=home&__biz=MzUyNDU0MDY2Ng==#wechat_redirect',
+  music: 'https://music.163.com/#/user/home?id=369837843',
 };

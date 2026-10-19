@@ -6,12 +6,17 @@ import { site, social } from '../config';
 import { getDB, getSetting } from '../lib/db';
 import { renderMarkdown } from '../lib/markdown';
 
-const DEFAULT_ABOUT_MD = `我是 ${site.name}（${site.nameZh}），一名摄影爱好者。
-这个网站收录我的摄影作品与文字——数码与胶片，风光与街头，以及一些日常的、无所事事的瞬间。
+// 默认简介同步自旧 hexo 站（about 页正文 + 签名 +「撩一撩」社交链接）；
+// 后台「简介」保存过后以 D1 里的内容为准。
+const DEFAULT_ABOUT_MD = `我是 ${site.nameZh}（Jeff.Chal），It's Habitat with Love ♥
 
-如果你对我的作品感兴趣，欢迎通过以下方式联系我：
+有人说，林深时见鹿，海蓝时见鲸，梦醒时见你。
+可实际，林深时雾起，海蓝时潮涌，梦醒时夜续。
+未见鹿，未见鲸，未见你。
+最后形同陌路的两人，到现在你是否还想起。
+虽隔千里，任愿你有好运触手可及。
 
-[GitHub](${social.github}) · [Instagram](${social.instagram})`;
+[GitHub](${social.github}) · [CSDN](${social.csdn}) · [微信公众号](${social.wechat}) · [网易云音乐](${social.music})`;
 
 let aboutMd: string | null = null;
 try {
