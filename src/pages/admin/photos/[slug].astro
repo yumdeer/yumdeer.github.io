@@ -1,15 +1,19 @@
 ---
-// /admin/photos/[slug] — 照片管理：浏览器压缩上传（多选）/ 重命名 / 排序 / 删除
+// /admin/photos/[slug] — 照片管理：浏览器压缩上传（多选）/ 重命名 / 移动到其他项目 / 排序 / 删除
 import AdminLayout from '../../../layouts/AdminLayout.astro';
-import { getDB, getProject, listPhotos, r2Key } from '../../../lib/db';
+import { getDB, getProject, listPhotos, listProjects, r2Key } from '../../../lib/db';
 
 const { slug } = Astro.params;
 let project: Awaited<ReturnType<typeof getProject>>;
 let photos: Awaited<ReturnType<typeof listPhotos>> = [];
+let otherProjects: Awaited<ReturnType<typeof listProjects>> = [];
 try {
   const db = getDB();
   project = slug ? await getProject(db, slug) : undefined;
-  if (project) photos = await listPhotos(db, project.id);
+  if (project) {
+    photos = await listPhotos(db, project.id);
+    otherProjects = (await listProjects(db)).filter((p) => p.slug !== project.slug);
+  }
 } catch {}
 if (!project) return Astro.redirect('/404');
 ---
@@ -37,6 +41,7 @@ if (!project) return Astro.redirect('/404');
         <input class="ph-title" value={p.title} placeholder="标题" />
         <div class="admin-photo-tools">
           <button class="btn-save" type="button" title="保存标题">存</button>
+          <button class="btn-move" type="button" title="移动到其他项目">移</button>
           <button class="btn-danger btn-del" type="button">删</button>
         </div>
       </figure>
@@ -44,6 +49,11 @@ if (!project) return Astro.redirect('/404');
   </div>
   <p class="admin-hint" id="reorder-msg" hidden></p>
   {photos.length === 0 && <p class="admin-hint">还没有照片。</p>}
+  <script
+    type="application/json"
+    id="move-targets"
+    set:html={JSON.stringify(otherProjects.map((p) => ({ slug: p.slug, title: p.title })))}
+  />
 </AdminLayout>
 
 <script>
@@ -177,6 +187,54 @@ if (!project) return Astro.redirect('/404');
       if (!confirm('删除这张照片？')) return;
       await fetch(`/api/admin/photos/${id}`, { method: 'DELETE' });
       fig.remove();
+    }
+    if (btn.classList.contains('btn-move')) {
+      // 目标项目列表由 SSR 注入（排除当前项目）
+      const targets = JSON.parse(document.getElementById('move-targets')!.textContent || '[]') as {
+        slug: string;
+        title: string;
+      }[];
+      if (!targets.length) return alert('没有其他项目可移动，先去「影像」页新建一个。');
+
+      // 工具条原地变下拉：选定即迁移；Esc/失焦取消还原按钮
+      const tools = btn.parentElement!;
+      const sel = document.createElement('select');
+      sel.className = 'ph-move-sel';
+      sel.innerHTML =
+        '<option value="">移动到…</option>' +
+        targets.map((t) => `<option value="${t.slug}">${t.title}</option>`).join('');
+      btn.hidden = true;
+      tools.insertBefore(sel, btn);
+      sel.focus();
+      const restore = () => {
+        sel.remove();
+        btn.hidden = false;
+      };
+      sel.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Escape') restore();
+      });
+      sel.addEventListener('blur', () => setTimeout(restore, 150)); // 等 change 先触发
+      sel.addEventListener('change', async () => {
+        const to = sel.value;
+        if (!to) return;
+        const title = targets.find((t) => t.slug === to)!.title;
+        if (!confirm(`移动这张照片到「${title}」？`)) return restore();
+        const r = await fetch(`/api/admin/photos/${id}`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ toProjectSlug: to }),
+        });
+        if (!r.ok) {
+          alert((await r.json().catch(() => ({}))).error || '移动失败');
+          return restore();
+        }
+        fig.remove();
+        if (reorderMsg) {
+          reorderMsg.hidden = false;
+          reorderMsg.textContent = `已移动到「${title}」 ✓`;
+          setTimeout(() => (reorderMsg.hidden = true), 1800);
+        }
+      });
     }
   });
 
