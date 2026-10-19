@@ -130,9 +130,11 @@ const { photos, title } = Astro.props;
     };
     // 停留 4s 从「图片真正加载完成」起算：慢网下大图还没显示就被
     // 固定 setInterval 切走（等于没看清就跳过）。
+    // 注意：setTimeout 是一次性链 —— 每次切图后必须重新 startAuto 续链，
+    // 否则放完一张就停（setInterval 会自动重复，这里不会）。
     const startAuto = () => {
       stopAuto();
-      if (!presenting || !autoWanted) return;
+      if (!presenting || !autoWanted || ended) return; // END 画面静止等用户选择
       const gen = autoGen;
       const img = imgs[current];
       const beginTimer = () => {
@@ -140,11 +142,13 @@ const { photos, title } = Astro.props;
         autoTimer = setTimeout(() => {
           if (gen !== autoGen) return;
           next();
+          startAuto(); // 续链：next 到末尾时 endShow 置 ended，下一行空转
         }, 4000);
       };
       if (img.complete && img.naturalWidth > 0) beginTimer();
       else {
-        // 未加载完：等 load 再计时；error 也放行（坏图不该卡死放映）
+        // 未加载完：等 load 再计时；error 也放行（坏图不该卡死放映）。
+        // 非 active 图是 display:none，lazy 图要等 show() 切换可见才开始加载
         img.addEventListener('load', beginTimer, { once: true });
         img.addEventListener('error', beginTimer, { once: true });
       }
@@ -263,6 +267,8 @@ const { photos, title } = Astro.props;
     slideshowKeys = (e: KeyboardEvent) => {
       if (e.key === 'ArrowLeft') prev();
       if (e.key === 'ArrowRight') next();
+      // 键盘切换后重挂计时链（等 load 阶段被手动切图会断链；顺带重置 4s 节拍）
+      if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && presenting && autoWanted) startAuto();
       if (e.key === 'Escape' && presenting) exitPresent();
       if (e.key === ' ' && presenting) {
         e.preventDefault();
