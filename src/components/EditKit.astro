@@ -613,18 +613,47 @@ const { email } = Astro.props;
           </div>`);
         $('#ek-pj-save')!.addEventListener('click', async () => {
           const newSlug = ($('#ek-pj-slug') as HTMLInputElement).value.trim();
-          await api(`/api/admin/projects/${projSlug}`, {
-            method: 'PUT',
-            body: JSON.stringify({
-              slug: newSlug,
-              title: ($('#ek-pj-title') as HTMLInputElement).value,
-              year: ($('#ek-pj-year') as HTMLInputElement).value,
-              description: ($('#ek-pj-desc') as HTMLTextAreaElement).value,
-            }),
-          });
-          // slug 变了 URL 就变了：跳到新地址，否则原地刷新
-          if (newSlug && newSlug !== projSlug) location.replace(`/project/${newSlug}/`);
-          else location.reload();
+          const saveBtn = $('#ek-pj-save') as HTMLButtonElement;
+          saveBtn.disabled = true;
+          saveBtn.textContent = '保存中…';
+          try {
+            const r = await api(`/api/admin/projects/${projSlug}`, {
+              method: 'PUT',
+              body: JSON.stringify({
+                slug: newSlug,
+                title: ($('#ek-pj-title') as HTMLInputElement).value,
+                year: ($('#ek-pj-year') as HTMLInputElement).value,
+                description: ($('#ek-pj-desc') as HTMLTextAreaElement).value,
+              }),
+            });
+            // 改名 + 有照片 → NDJSON 进度流（R2 逐对象复制较慢，进度显示在按钮上）
+            if ((r.headers.get('content-type') || '').includes('x-ndjson') && r.body) {
+              const reader = r.body.getReader();
+              const dec = new TextDecoder();
+              let buf = '';
+              for (;;) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buf += dec.decode(value, { stream: true });
+                const lines = buf.split('\n');
+                buf = lines.pop() ?? '';
+                for (const line of lines) {
+                  if (!line.trim()) continue;
+                  const d = JSON.parse(line) as { progress?: number; total?: number; error?: string };
+                  if (d.error) throw new Error(d.error);
+                  if (typeof d.progress === 'number' && d.total)
+                    saveBtn.textContent = `迁移中 ${d.progress}/${d.total}…`;
+                }
+              }
+            }
+            // slug 变了 URL 就变了：跳到新地址，否则原地刷新
+            if (newSlug && newSlug !== projSlug) location.replace(`/project/${newSlug}/`);
+            else location.reload();
+          } catch (e) {
+            alert(`保存失败：${e instanceof Error ? e.message : e}`);
+            saveBtn.disabled = false;
+            saveBtn.textContent = '保存';
+          }
         });
         $('#ek-pj-del')!.addEventListener('click', async () => {
           if (!confirm(`删除整个项目（含全部照片）？不可恢复！`)) return;

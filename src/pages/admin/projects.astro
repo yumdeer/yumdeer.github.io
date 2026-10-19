@@ -73,6 +73,13 @@ try {
 
     if (btn.classList.contains('btn-save')) {
       const newSlug = (tr.querySelector('.p-slug') as HTMLInputElement).value.trim();
+      btn.disabled = true;
+      btn.textContent = '保存中…';
+      const fail = (msg: string) => {
+        alert(msg);
+        btn.disabled = false;
+        btn.textContent = '保存';
+      };
       const r = await fetch(`/api/admin/projects/${slug}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
@@ -85,13 +92,55 @@ try {
         }),
       });
       if (!r.ok) {
-        alert((await r.json()).error || '保存失败');
+        fail((await r.json().catch(() => ({}))).error || '保存失败');
         return;
       }
+
+      // 改名 + 有照片 → 服务端 NDJSON 流逐行回报迁移进度（R2 逐对象复制较慢）
+      if ((r.headers.get('content-type') || '').includes('x-ndjson') && r.body) {
+        const barRow = document.createElement('tr');
+        barRow.innerHTML = `<td colspan="6" style="padding:4px 8px 16px">
+          <div class="admin-progress-bar"><div class="admin-progress-fill"></div></div>
+          <span class="p-prog-text" style="font-size:12.5px;color:#8e8e96">准备迁移照片存储…</span>
+        </td>`;
+        tr.after(barRow);
+        const fill = barRow.querySelector('.admin-progress-fill') as HTMLElement;
+        const text = barRow.querySelector('.p-prog-text') as HTMLElement;
+
+        const reader = r.body.getReader();
+        const dec = new TextDecoder();
+        let buf = '';
+        let err: string | null = null;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          const lines = buf.split('\n');
+          buf = lines.pop() ?? '';
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            const d = JSON.parse(line) as { progress?: number; total?: number; error?: string };
+            if (d.error) err = d.error;
+            else if (typeof d.progress === 'number' && d.total) {
+              fill.style.width = `${Math.round((d.progress / d.total) * 100)}%`;
+              text.textContent = `迁移照片存储 ${d.progress} / ${d.total}…`;
+            }
+          }
+        }
+        barRow.remove();
+        if (err) {
+          fail(`迁移失败：${err}\n数据库未变更，站点仍使用原 slug。`);
+          return;
+        }
+      }
+
       if (newSlug !== slug) location.reload(); // slug 变了：行标识与链接全部失效，刷新重取
       else {
         btn.textContent = '已保存';
-        setTimeout(() => (btn.textContent = '保存'), 1200);
+        setTimeout(() => {
+          btn.textContent = '保存';
+          btn.disabled = false;
+        }, 1200);
       }
     }
 
