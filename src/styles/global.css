@@ -812,8 +812,10 @@ img {
 
 /* ── 通用文字页（关于 / 博客）────────────────────────────────────────── */
 
+/* 简介页与文章页同款：窄栏居中（宽屏两侧留白对称）、舒适行距 */
 .prose-page {
-  max-width: 640px;
+  max-width: 680px;
+  margin: 0 auto;
   padding: 60px 24px 100px;
 }
 
@@ -826,8 +828,24 @@ img {
 }
 
 .prose-page p {
-  margin-bottom: 1.2em;
-  color: #333;
+  margin-bottom: 1.5em;
+  color: #222;
+  font-size: 15px;
+  line-height: 2;
+}
+
+/* 社交链接：品牌小图标 + 文字（fill=currentColor 随主题联动） */
+.prose-page a.social-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.prose-page a.social-link svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  fill: currentColor;
 }
 
 /* ── 博客列表 ─────────────────────────────────────────────────────────── */

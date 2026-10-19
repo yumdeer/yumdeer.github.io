@@ -16,7 +16,7 @@ const DEFAULT_ABOUT_MD = `我是 ${site.nameZh}（Jeff.Chal），It's Habitat wi
 最后形同陌路的两人，到现在你是否还想起。
 虽隔千里，任愿你有好运触手可及。
 
-[GitHub](${social.github}) · [CSDN](${social.csdn}) · [微信公众号](${social.wechat}) · [网易云音乐](${social.music})`;
+[GitHub](${social.github}) · [小红书](${social.xiaohongshu}) · [微信公众号](${social.wechat}) · [网易云音乐](${social.music})`;
 
 let aboutMd: string | null = null;
 try {
@@ -24,7 +24,24 @@ try {
 } catch {
   // 数据库未初始化
 }
-const aboutHtml = renderMarkdown(aboutMd?.trim() ? aboutMd : DEFAULT_ABOUT_MD);
+
+// ── 社交链接图标（同步自旧 hexo 站「撩一撩」：链接前带品牌小图标）──
+// 渲染后按域名匹配注入内联 SVG，fill=currentColor 随主题/链接色联动，
+// 用户自定义简介里的同域名链接也会自动带图标。
+const ICONS: [RegExp, string][] = [
+  [/github\.com/i, '<path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.438 9.8 8.205 11.387.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61-.546-1.387-1.333-1.756-1.333-1.756-1.09-.745.082-.73.082-.73 1.205.084 1.84 1.237 1.84 1.237 1.07 1.834 2.807 1.304 3.492.997.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12c0-6.627-5.373-12-12-12z"/>'],
+  [/xhslink\.cn|xiaohongshu\.com/i, '<rect x="4" y="4" width="16" height="16" rx="4" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M12 8.8v6.4M9.2 10.6 7.6 13m7.2-2.4L16.4 13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>'],
+  [/weixin\.qq\.com|mp\.weixin/i, '<path d="M8.6 3.2C5 3.2 2.1 5.66 2.1 8.7c0 1.71.94 3.24 2.42 4.27l-.6 1.98c-.07.22.16.41.36.28l2.28-1.32c.62.18 1.29.28 1.98.28h.42c-.2-.57-.3-1.17-.3-1.79 0-2.98 2.72-5.39 6.07-5.39.1 0 .2.002.3.01C14.55 4.7 11.9 3.2 8.6 3.2zM6.7 7.06a.92.92 0 1 1 0 1.84.92.92 0 0 1 0-1.84zm3.84 0a.92.92 0 1 1 0 1.84.92.92 0 0 1 0-1.84z"/><path d="M15.4 8.34c-2.92 0-5.28 2.02-5.28 4.52s2.36 4.52 5.28 4.52c.6 0 1.18-.09 1.71-.25l1.95 1.13c.2.12.44-.07.37-.29l-.53-1.62c1.1-.83 1.78-2.05 1.78-3.49 0-2.5-2.36-4.52-5.28-4.52zm-1.94 3.41a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6zm3.88 0a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6z"/>'],
+  [/music\.163\.com/i, '<path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/>'],
+];
+const withIcons = (html: string) =>
+  html.replace(/<a href="([^"]+)"/g, (m, href: string) => {
+    const icon = ICONS.find(([re]) => re.test(href));
+    if (!icon) return m;
+    return `<a href="${href}" class="social-link"><svg viewBox="0 0 24 24" aria-hidden="true">${icon[1]}</svg>`;
+  });
+
+const aboutHtml = withIcons(renderMarkdown(aboutMd?.trim() ? aboutMd : DEFAULT_ABOUT_MD));
 ---
 
 <Layout title="INFO" description={`艺术家简介 · ${site.nameZh}`} activePath="/about/">

@@ -26,7 +26,7 @@ export const site = {
 // 在艺术家简介页（INFO）默认文案中引用。
 export const social = {
   github: 'https://github.com/Jeffchal',
-  csdn: 'https://me.csdn.net/weixin_40539125',
+  xiaohongshu: 'https://xhslink.cn/o/99HWCWNGopf',
   wechat: 'https://mp.weixin.qq.com/mp/profile_ext?action=home&__biz=MzUyNDU0MDY2Ng==#wechat_redirect',
   music: 'https://music.163.com/#/user/home?id=369837843',
 };
