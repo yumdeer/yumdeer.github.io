@@ -1,15 +1,25 @@
-// /api/admin/projects/[slug] — PUT 更新元数据（含改名）| DELETE 删除（含 R2 照片与数据行）
+// /api/admin/projects/[slug] — PUT 更新元数据（含改名 / 主页上墙开关）| DELETE 删除
 // 改名+有照片时 PUT 返回 NDJSON 流：每迁完一张照片推一行 {progress,total}，
 // 前端据此渲染进度条（迁移较慢，逐对象复制 R2 无 rename）。
 import type { APIRoute } from 'astro';
-import { getDB, getR2, listPhotos, r2Key, type PhotoRow } from '../../../../lib/db';
+import { getDB, getR2, listPhotos, r2Key, getHiddenProjects, setHiddenProjects, type PhotoRow } from '../../../../lib/db';
 
 export const PUT: APIRoute = async ({ params, request }) => {
   const db = getDB();
   const body = await request.json().catch(() => null);
   if (!body) return Response.json({ error: 'bad request' }, { status: 400 });
-
   const oldSlug = params.slug!;
+
+  // 主页显示墙开关（独立于元数据保存，点击即生效）：true = 不上墙
+  if (typeof body.hideFromHome === 'boolean') {
+    const list = await getHiddenProjects(db);
+    const i = list.indexOf(oldSlug);
+    if (body.hideFromHome && i === -1) list.push(oldSlug);
+    if (!body.hideFromHome && i !== -1) list.splice(i, 1);
+    await setHiddenProjects(db, list);
+    return Response.json({ ok: true, hidden: body.hideFromHome });
+  }
+
   const newSlug =
     typeof body.slug === 'string' && body.slug.trim() !== oldSlug ? body.slug.trim() : null;
   if (newSlug && !/^[\w-]+$/.test(newSlug)) {
@@ -55,6 +65,13 @@ export const PUT: APIRoute = async ({ params, request }) => {
   const photos: PhotoRow[] = await listPhotos(db, proj.id);
   if (!photos.length) {
     await applyUpdate();
+    // 「不上墙」列表同步换新 slug（快路径改名）
+    const hidden = await getHiddenProjects(db);
+    const hi = hidden.indexOf(oldSlug);
+    if (hi !== -1) {
+      hidden[hi] = newSlug;
+      await setHiddenProjects(db, hidden);
+    }
     return Response.json({ ok: true, slug: newSlug });
   }
 
@@ -85,6 +102,13 @@ export const PUT: APIRoute = async ({ params, request }) => {
           send({ progress: i + 1, total });
         }
         await applyUpdate();
+        // 「不上墙」列表里若含旧 slug，同步换成新 slug
+        const hidden = await getHiddenProjects(db);
+        const hi = hidden.indexOf(oldSlug);
+        if (hi !== -1) {
+          hidden[hi] = newSlug;
+          await setHiddenProjects(db, hidden);
+        }
         // D1 已指向新 key：清理旧目录（失败仅残留无引用对象，不影响前台）
         for (const p of photos) {
           await r2.delete(r2Key.photoFull(oldSlug, p.slug)).catch(() => {});
@@ -124,5 +148,12 @@ export const DELETE: APIRoute = async ({ params }) => {
     }
   }
   await db.prepare('DELETE FROM projects WHERE id = ?').bind(proj.id).run(); // 级联删照片行
+  // 从「不上墙」列表移除（避免残留死 slug）
+  const hidden = await getHiddenProjects(db);
+  const hi = hidden.indexOf(slug);
+  if (hi !== -1) {
+    hidden.splice(hi, 1);
+    await setHiddenProjects(db, hidden);
+  }
   return Response.json({ ok: true });
 };

@@ -128,8 +128,14 @@ export async function listTracks(db: ReturnType<typeof getDB>): Promise<TrackRow
   return results;
 }
 
-// 首页精选：全部照片（跨项目）
-export async function listAllPhotos(db: ReturnType<typeof getDB>) {
+// 首页精选：全部照片（跨项目）。hideExcluded = 排除「不上墙」项目
+// （site_settings.home_hidden_projects，逗号分隔 slug；项目页不受影响）。
+export async function listAllPhotos(db: ReturnType<typeof getDB>, hideExcluded = false) {
+  let hidden = new Set<string>();
+  if (hideExcluded) {
+    const v = await getSetting(db, 'home_hidden_projects');
+    hidden = new Set((v || '').split(',').map((s) => s.trim()).filter(Boolean));
+  }
   const { results } = await db
     .prepare(
       `SELECT p.*, pr.slug AS project_slug FROM photos p
@@ -137,7 +143,17 @@ export async function listAllPhotos(db: ReturnType<typeof getDB>) {
        ORDER BY pr.sort_order, p.sort_order, p.id`,
     )
     .all<PhotoRow & { project_slug: string }>();
-  return results;
+  return hidden.size ? results.filter((p) => !hidden.has(p.project_slug)) : results;
+}
+
+// 「不上墙」项目 slug 集合（后台开关列表）
+export async function getHiddenProjects(db: ReturnType<typeof getDB>): Promise<string[]> {
+  const v = await getSetting(db, 'home_hidden_projects');
+  return (v || '').split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+export async function setHiddenProjects(db: ReturnType<typeof getDB>, slugs: string[]): Promise<void> {
+  await setSetting(db, 'home_hidden_projects', slugs.join(','));
 }
 
 // ── 站点设置（key-value，后台可编辑的页面文案等）─────────────────────────

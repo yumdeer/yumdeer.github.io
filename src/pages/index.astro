@@ -7,7 +7,7 @@ import { GRID_SIZES } from '../lib/photo-sizes';
 
 let all: { id: number; slug: string; projectSlug: string; title: string; blur: string | null; w: number; h: number }[] = [];
 try {
-  const photos = await listAllPhotos(getDB());
+  const photos = await listAllPhotos(getDB(), true);
   all = photos.map((p) => ({
     id: p.id,
     slug: p.slug,

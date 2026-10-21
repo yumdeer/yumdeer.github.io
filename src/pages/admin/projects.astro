@@ -1,11 +1,14 @@
 ---
-// /admin/projects — 项目管理：新建 / 编辑元数据 / 删除 / 进入照片管理
+// /admin/projects — 项目管理：新建 / 编辑元数据 / 主页上墙开关 / 删除 / 进入照片管理
 import AdminLayout from '../../layouts/AdminLayout.astro';
-import { getDB, listProjects } from '../../lib/db';
+import { getDB, listProjects, getHiddenProjects } from '../../lib/db';
 
 let projects: Awaited<ReturnType<typeof listProjects>> = [];
+let hidden: string[] = [];
 try {
-  projects = await listProjects(getDB());
+  const db = getDB();
+  projects = await listProjects(db);
+  hidden = await getHiddenProjects(db);
 } catch {}
 ---
 
@@ -36,6 +39,14 @@ try {
           <td><input class="p-year" value={p.year ?? ''} style="width:4em" /></td>
           <td class="admin-actions">
             <button class="btn-save" type="button">保存</button>
+            <button
+              class="btn-wall btn-toggle-wall"
+              type="button"
+              data-hidden={hidden.includes(p.slug) ? '1' : '0'}
+              title="关闭后该项目照片不出现在主页显示墙，项目页不受影响"
+            >
+              {hidden.includes(p.slug) ? '不上墙' : '上墙 ✓'}
+            </button>
             <a href={`/admin/photos/${p.slug}/`}>照片</a>
             <a href={`/project/${p.slug}/`} target="_blank">预览 ↗</a>
             <button class="btn-danger btn-del" type="button">删除</button>
@@ -148,6 +159,25 @@ try {
       if (!confirm(`删除项目「${slug}」及其全部照片？`)) return;
       await fetch(`/api/admin/projects/${slug}`, { method: 'DELETE' });
       location.reload();
+    }
+
+    // 主页显示墙开关：即点即生效（独立于行内"保存"）
+    if (btn.classList.contains('btn-toggle-wall')) {
+      const toHidden = btn.dataset.hidden !== '1';
+      btn.disabled = true;
+      const r = await fetch(`/api/admin/projects/${slug}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ hideFromHome: toHidden }),
+      });
+      if (!r.ok) {
+        alert((await r.json().catch(() => ({}))).error || '操作失败');
+        btn.disabled = false;
+        return;
+      }
+      btn.dataset.hidden = toHidden ? '1' : '0';
+      btn.textContent = toHidden ? '不上墙' : '上墙 ✓';
+      btn.disabled = false;
     }
   });
 </script>
