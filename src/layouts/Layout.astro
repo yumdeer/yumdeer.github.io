@@ -426,6 +426,9 @@ const grouped = categories.map((cat) => ({
         ensure(): HTMLAudioElement {
           if (!this.audio) {
             this.audio = new Audio();
+            // 不预取音频数据（Chrome 默认 'auto' 会积极预取整首），
+            // 点播放才拉；慢网络下未播放的预取会挤占页面加载带宽
+            this.audio.preload = 'metadata';
             this.audio.volume = 0.5;
           }
           return this.audio;

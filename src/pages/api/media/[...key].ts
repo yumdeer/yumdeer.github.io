@@ -33,6 +33,15 @@ const parseRange = (header: string | undefined, size: number): { offset: number;
   return { offset, length: end - offset + 1 };
 };
 
+// 单次 Range 响应最多 2MB：浏览器点播放会发 Range: bytes=0- 开放式全量
+// 请求，9MB 音频在慢网络（国内→美西）下持续传输会占满 HTTP/2 单连接的
+// 拥塞窗口，把页面导航/图片请求全部挤成"等歌曲下完才响应"。
+// 服务端分片：开放式/大段请求只回 2MB（约 50 秒缓冲 @320kbps），浏览器
+// 收够即停，播放推进到需要时再发 bytes=N- 取下一段——传输从持续占用
+// 变为间歇分片，导航请求获得喘息窗口。客户端明确要的小段（如 Safari
+// 的 bytes=0-1 探测）不受影响。
+const MAX_CHUNK = 2 * 1024 * 1024;
+
 export const GET: APIRoute = async ({ params, request }) => {
   const key = params.key;
   if (!key || key.includes('..')) return new Response('Not found', { status: 404 });
@@ -64,7 +73,8 @@ export const GET: APIRoute = async ({ params, request }) => {
     });
 
   if (range) {
-    const obj = await r2.get(key, { range: { offset: range.offset, length: range.length } });
+    const length = Math.min(range.length, MAX_CHUNK);
+    const obj = await r2.get(key, { range: { offset: range.offset, length } });
     if (!obj) return new Response('Not found', { status: 404 });
     const buf = await obj.arrayBuffer();
     return new Response(buf, {
