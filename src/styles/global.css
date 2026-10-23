@@ -356,9 +356,13 @@ img {
   content: '♪ ';
 }
 
-/* 暂停中（保留进度，再点续播）：▷ = U+25B7 无 emoji 变体，安全 */
+/* 暂停中（保留进度，再点续播）：▷ = U+25B7 无 emoji 变体，安全。
+   字形天然比文字高，缩到 8px + 上对齐，视觉与 ♪ 前缀等重 */
 .ambient-sounds button.paused::before {
-  content: '▷ ';
+  content: '▷';
+  font-size: 8px;
+  margin-right: 6px;
+  vertical-align: 1px;
 }
 
 /* ── 网易云歌曲卡片 ──────────────────────────────────────────────────────
