@@ -39,7 +39,7 @@ try {
           <td>{t.artist ?? ''}</td>
           <td>{Math.floor(t.duration_sec / 60)}:{String(t.duration_sec % 60).padStart(2, '0')}</td>
           <td class="admin-actions">
-            <audio controls preload="none" style="height:2em" src={`/api/media/audio/${t.slug}.mp3`}></audio>
+            <audio controls preload="none" style="height:2em" src={`/api/media/audio/${t.slug}.mp3?v=${t.id}`}></audio>
             <button class="btn-default btn-set-default" type="button" data-default={t.slug === defaultSlug ? '1' : '0'}>
               {t.slug === defaultSlug ? '默认 ✓' : '设为默认'}
             </button>
