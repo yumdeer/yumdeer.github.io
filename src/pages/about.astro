@@ -46,7 +46,14 @@ const aboutHtml = withIcons(renderMarkdown(effectiveMd));
   <div class="prose-page" data-ek-about>
     <h1>INFO</h1>
     <div class="prose" set:html={aboutHtml} />
-    <!-- EditKit 回填编辑框用：生效的 Markdown 源码（含默认文案，未保存过也不回空框） -->
-    <Fragment set:html={`<!--EK_ABOUT_MD_START-->${effectiveMd}<!--EK_ABOUT_MD_END-->`} />
+    <!-- EditKit 回填编辑框用：生效的 Markdown 源码（含默认文案，未保存过也不回空框）。
+         必须存 JSON 岛而不是注释标记+裸文本：裸文本会被浏览器当可见内容渲染，
+         导致「渲染结果 + Markdown 源码」双份显示；script 内容不渲染不执行。
+         「<」转义为 \u003c 防止源码里的 </script> 提前闭合标签（JSON.parse 自动还原）。 -->
+    <script
+      type="application/json"
+      id="ek-about-src"
+      set:html={JSON.stringify(effectiveMd).replace(/</g, '\\u003c')}
+    />
   </div>
 </Layout>
