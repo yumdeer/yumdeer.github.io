@@ -33,10 +33,11 @@ export function getR2() {
     put(key: string, value: ArrayBuffer | ReadableStream | string, opts?: {
       httpMetadata?: Record<string, string>;
     }): Promise<unknown>;
-    get(key: string): Promise<{
+    get(key: string, opts?: { range?: { offset: number; length?: number } }): Promise<{
       body: ReadableStream;
       httpMetadata?: Record<string, string>;
     } | null>;
+    head(key: string): Promise<{ size: number; httpMetadata?: Record<string, string> } | null>;
     delete(key: string): Promise<unknown>;
     list(opts?: { prefix?: string }): Promise<{ objects: { key: string }[] }>;
   };

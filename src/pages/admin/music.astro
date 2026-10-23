@@ -85,24 +85,35 @@ try {
       a.addEventListener('error', () => resolve(0));
     });
 
-    progress.textContent = '上传中…';
+    progress.textContent = '编码中…';
     const b64 = await new Promise<string>((resolve) => {
       const fr = new FileReader();
       fr.onload = () => resolve((fr.result as string).split(',')[1]);
       fr.readAsDataURL(file);
     });
 
-    const r = await fetch('/api/admin/tracks', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: file.name, title, artist, durationSec: duration, audioB64: b64 }),
-    });
-    if (r.ok) location.reload();
-    else {
-      alert((await r.json()).error || '上传失败');
-      btn.disabled = false;
-      progress.hidden = true;
-    }
+    // XHR 而不是 fetch：fetch 拿不到上传进度事件，大音频上传会长时间无反馈
+    const payload = JSON.stringify({ name: file.name, title, artist, durationSec: duration, audioB64: b64 });
+    const mb = (n: number) => (n / 1048576).toFixed(1) + 'MB';
+    await new Promise<void>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/admin/tracks');
+      xhr.setRequestHeader('content-type', 'application/json');
+      xhr.upload.onprogress = (ev) => {
+        if (ev.lengthComputable)
+          progress.textContent = `上传中… ${Math.round((ev.loaded / ev.total) * 100)}%（${mb(ev.loaded)} / ${mb(ev.total)}）`;
+      };
+      xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(JSON.parse(xhr.responseText || '{}').error || `HTTP ${xhr.status}`)));
+      xhr.onerror = () => reject(new Error('网络错误'));
+      xhr.send(payload);
+    }).then(
+      () => location.reload(),
+      (err: Error) => {
+        alert(err.message || '上传失败');
+        btn.disabled = false;
+        progress.hidden = true;
+      },
+    );
   });
 
   // 删除 / 设默认（再点一次取消）
