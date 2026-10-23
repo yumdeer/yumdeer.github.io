@@ -451,16 +451,32 @@ const grouped = categories.map((cat) => ({
 
         play(slug: string, url: string) {
           const a = this.ensure();
-          if (this.current === slug && !a.paused) {
-            a.pause();
-            this.current = null;
-          } else {
-            a.src = url;
-            void a.play();
-            this.current = slug;
-            // 手动点歌：随机队列里去掉它（避免紧接着随机又播同一首）
-            if (this.mode === 'shuffle') this.queue = this.queue.filter((s) => s !== slug);
+          if (this.current === slug) {
+            // 同一曲：播放中 → 暂停；已暂停 → 续播（保留进度，不从头来）
+            if (a.paused) {
+              void a.play();
+            } else {
+              a.pause();
+            }
+            return;
           }
+          // 换曲：先停文章内的配乐（互斥，见 pauseArticleAudio 注释）
+          this.pauseArticleAudio();
+          a.src = url;
+          void a.play();
+          this.current = slug;
+          // 手动点歌：随机队列里去掉它（避免紧接着随机又播同一首）
+          if (this.mode === 'shuffle') this.queue = this.queue.filter((s) => s !== slug);
+        },
+
+        // 文章正文里的 <audio>（编辑器上传的配乐）与背景播放器互斥：
+        // 一边出声另一边自动暂停，避免两路音乐叠着播
+        pauseArticleAudio() {
+          document
+            .querySelectorAll<HTMLAudioElement>('main audio, .prose audio, article audio')
+            .forEach((el) => {
+              if (el !== this.audio && !el.paused) el.pause();
+            });
         },
 
         // ended 后按模式自动连播
@@ -547,19 +563,25 @@ const grouped = categories.map((cat) => ({
           li.appendChild(btn);
           list.appendChild(li);
         }
-        // 播完按模式自动连播（顺序/随机）
+        // 播完按模式自动连播（顺序/随机）；暂停/续播同步面板状态
         player.ensure().onended = () => {
           player.onEnded();
           syncPanel();
         };
+        player.ensure().onpause = () => syncPanel();
+        player.ensure().onplay = () => syncPanel();
       };
 
       const syncPanel = () => {
         document.querySelectorAll<HTMLButtonElement>('button[data-sound]').forEach((b) => {
           b.classList.toggle('playing', b.dataset.sound === engine.current);
         });
+        // 区分播放中 / 暂停中：暂停保留 current（续播不从头来），按钮显示 ▷
+        const trackPaused = !!(player.current && player.audio?.paused);
         document.querySelectorAll<HTMLButtonElement>('button[data-track]').forEach((b) => {
-          b.classList.toggle('playing', b.dataset.track === player.current);
+          const mine = b.dataset.track === player.current;
+          b.classList.toggle('playing', mine && !trackPaused);
+          b.classList.toggle('paused', mine && trackPaused);
         });
         // 只更新文字 span：textContent= 整体替换会把按钮里的 SVG 音符图标抹掉
         const playing = player.current
@@ -571,9 +593,25 @@ const grouped = categories.map((cat) => ({
         if (toggle) {
           const textEl = toggle.querySelector('.ambient-toggle-text');
           if (textEl) textEl.textContent = playing;
-          toggle.classList.toggle('on', !!(player.current || engine.current));
+          // 音符旋转只在真正出声时：暂停时停转（文字保留曲名，便于续播）
+          const audible = (player.current && !player.audio?.paused) || engine.current;
+          toggle.classList.toggle('on', !!audible);
         }
       };
+
+      // 互斥的另一方向：文章正文里的 <audio> 开始播放时暂停背景曲。
+      // media 事件不冒泡，必须捕获阶段监听在 document 上
+      document.addEventListener(
+        'play',
+        (e) => {
+          const t = e.target as HTMLAudioElement;
+          if (t === player.audio) return;
+          if (player.current && player.audio && !player.audio.paused) {
+            player.audio.pause(); // onpause → syncPanel 会刷新 UI（音符停转）
+          }
+        },
+        true,
+      );
 
       // 首次打开面板自动播默认曲目（点「播放器」是用户手势，允许出声；
       // 会话内只触发一次，用户手动停了再开面板不会强行复活）

@@ -3,6 +3,7 @@
 import Layout from '../../../layouts/Layout.astro';
 import { getDB, getArticle } from '../../../lib/db';
 import { renderMarkdown } from '../../../lib/markdown';
+import { enhanceNetease } from '../../../lib/netease';
 import { collLabelOf, collSlug } from '../../../lib/collections';
 
 const { collection, slug } = Astro.params;
@@ -10,10 +11,12 @@ const { collection, slug } = Astro.params;
 let article: Awaited<ReturnType<typeof getArticle>> = undefined;
 let html = '';
 try {
-  article = slug ? await getArticle(getDB(), slug) : undefined;
+  const db = getDB();
+  article = slug ? await getArticle(db, slug) : undefined;
   // URL 分类段须匹配：有分类严格匹配；未分类文章用 'none' 段（/blog/none/<slug>/）
   if (article && collSlug(article.collection) !== collection) article = undefined;
-  if (article) html = renderMarkdown(article.body_md);
+  // 网易云外链播放器已死（不再创建 audio），替换为歌曲卡片（信息走 song/detail API + D1 缓存）
+  if (article) html = await enhanceNetease(renderMarkdown(article.body_md), db);
 } catch {
   // DB 未初始化
 }

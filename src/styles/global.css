@@ -356,6 +356,74 @@ img {
   content: '♪ ';
 }
 
+/* 暂停中（保留进度，再点续播）：▷ = U+25B7 无 emoji 变体，安全 */
+.ambient-sounds button.paused::before {
+  content: '▷ ';
+}
+
+/* ── 网易云歌曲卡片 ──────────────────────────────────────────────────────
+   外链播放器已死（不再创建 audio），文章里的 iframe 渲染为静态卡片：
+   封面 + 歌名/歌手 + 跳转网易云 App/网页收听。深浅主题通用（半透明中性色） */
+.netease-card {
+  margin: 1.6em 0;
+}
+.netease-card a {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px 10px 10px;
+  border: 1px solid rgba(128, 128, 128, 0.25);
+  border-radius: 10px;
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.15s, background 0.15s;
+}
+.netease-card a:hover {
+  border-color: rgba(128, 128, 128, 0.55);
+  background: rgba(128, 128, 128, 0.06);
+}
+.netease-card img,
+.netease-cover-fallback {
+  width: 52px;
+  height: 52px;
+  border-radius: 8px;
+  object-fit: cover;
+  flex: none;
+}
+.netease-cover-fallback {
+  display: grid;
+  place-items: center;
+  background: rgba(128, 128, 128, 0.15);
+  color: #888;
+  font-size: 20px;
+}
+.netease-card-info {
+  min-width: 0;
+  flex: 1;
+}
+.netease-card-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.netease-card-artist {
+  margin: 2px 0 0;
+  font-size: 11px;
+  opacity: 0.6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.netease-card-go {
+  flex: none;
+  font-size: 11px;
+  opacity: 0.55;
+  white-space: nowrap;
+}
+
 .ambient-volume {
   display: flex;
   align-items: center;
