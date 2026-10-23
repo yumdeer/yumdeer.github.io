@@ -162,6 +162,32 @@ img {
   letter-spacing: 1px;
   cursor: pointer;
   transition: color 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.ambient-toggle .icon-note {
+  display: block;
+  flex: none;
+}
+
+/* 播放中：音符图标匀速旋转（音乐/环境音任一在响即转） */
+.ambient-toggle.on .icon-note {
+  animation: ambient-note-spin 3.2s linear infinite;
+}
+
+@keyframes ambient-note-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ambient-toggle.on .icon-note {
+    animation: none;
+    color: #111;
+  }
 }
 
 /* 日间/夜间开关：与「播放器」同风格的轻量图标按钮。
