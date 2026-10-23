@@ -682,10 +682,11 @@ const { email } = Astro.props;
         fetch('/about/', { headers: { 'x-ek-raw': '1' } })
           .then((r) => r.text())
           .then((html) => {
+            // 回填生效的 Markdown 源码（页面注释里嵌着，未保存过时=默认文案）。
+            // 绝不用渲染后文本兜底：纯文本丢了链接语法，保存会把
+            // 「默认文案文本 + 新输入」叠加在一起（追加 bug 的根源）。
             const m = html.match(/<!--EK_ABOUT_MD_START-->([\s\S]*?)<!--EK_ABOUT_MD_END-->/);
-            ($('#ek-ab-md') as HTMLTextAreaElement).value = m
-              ? m[1]
-              : document.querySelector('.prose')?.textContent?.trim() || '';
+            ($('#ek-ab-md') as HTMLTextAreaElement).value = m ? m[1] : '';
           });
         $('#ek-ab-save')!.addEventListener('click', async () => {
           await api('/api/admin/about', {

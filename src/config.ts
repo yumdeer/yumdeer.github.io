@@ -32,3 +32,16 @@ export const social = {
   music: 'https://y.music.163.com/m/user?id=369837843',
   email: 'mailto:875205504@qq.com',
 };
+
+// 「INFO · 艺术家简介」默认文案 — 同步自旧 hexo 站。
+// 前后台编辑器共用：未保存过自定义简介时，编辑框预填这份源码，
+// 保证「编辑框所见 = 前台所显」，修改即全量替换（不会追加/丢失）。
+export const DEFAULT_ABOUT_MD = `我是 ${site.nameZh}（Jeff.Chal），It's Habitat with Love ♥
+
+有人说，林深时见鹿，海蓝时见鲸，梦醒时见你。
+可实际，林深时雾起，海蓝时潮涌，梦醒时夜续。
+未见鹿，未见鲸，未见你。
+最后形同陌路的两人，到现在你是否还想起。
+虽隔千里，任愿你有好运触手可及。
+
+[GitHub](${social.github}) · [小红书](${social.xiaohongshu}) · [网易云音乐](${social.music}) · [875205504@qq.com](${social.email})`;

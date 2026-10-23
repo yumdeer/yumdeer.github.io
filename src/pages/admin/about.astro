@@ -3,23 +3,28 @@
 // 保存到 D1 site_settings.about_md，前台 /about/ 即时生效。
 import AdminLayout from '../../layouts/AdminLayout.astro';
 import { getDB, getSetting } from '../../lib/db';
+import { DEFAULT_ABOUT_MD } from '../../config';
 
 let aboutMd: string | null = null;
 try {
   aboutMd = await getSetting(getDB(), 'about_md');
 } catch {}
+// 编辑框预填「前台当前生效的内容」（未保存过 = 默认文案源码），
+// 所见即所显：直接在上面改，保存即全量替换，不存在追加。
+const effectiveMd = aboutMd?.trim() ? aboutMd : DEFAULT_ABOUT_MD;
 ---
 <AdminLayout title="简介">
   <h1>简介</h1>
   <p class="admin-hint">
     编辑前台「INFO · 艺术家简介」页（侧栏底部入口）的正文。支持 Markdown：
-    段落、链接、图片、音乐外链等，与文章编辑一致。留空保存 = 恢复默认文案。
+    段落、链接、图片、音乐外链等，与文章编辑一致。编辑框里就是前台当前
+    显示的内容，直接修改后保存即可（全量替换）。清空保存 = 恢复默认文案。
   </p>
 
   <form class="admin-form" id="about-form">
     <label>
       简介（Markdown）
-      <textarea name="about_md" rows="14" placeholder="我是 …" style="width:100%;font:inherit">{aboutMd ?? ''}</textarea>
+      <textarea name="about_md" rows="14" placeholder="我是 …" style="width:100%;font:inherit">{effectiveMd}</textarea>
     </label>
     <div class="admin-progress" id="about-progress" hidden></div>
     <button type="submit" id="about-btn">保存</button>

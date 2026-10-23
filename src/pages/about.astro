@@ -2,21 +2,9 @@
 // INFO · 艺术家简介 — 正文来自后台「简介」编辑（D1 site_settings.about_md），
 // 未编辑过时回退到默认文案。Markdown 渲染，支持链接/图片/音乐外链。
 import Layout from '../layouts/Layout.astro';
-import { site, social } from '../config';
+import { site, DEFAULT_ABOUT_MD } from '../config';
 import { getDB, getSetting } from '../lib/db';
 import { renderMarkdown } from '../lib/markdown';
-
-// 默认简介同步自旧 hexo 站（about 页正文 + 签名 +「撩一撩」社交链接）；
-// 后台「简介」保存过后以 D1 里的内容为准。
-const DEFAULT_ABOUT_MD = `我是 ${site.nameZh}（Jeff.Chal），It's Habitat with Love ♥
-
-有人说，林深时见鹿，海蓝时见鲸，梦醒时见你。
-可实际，林深时雾起，海蓝时潮涌，梦醒时夜续。
-未见鹿，未见鲸，未见你。
-最后形同陌路的两人，到现在你是否还想起。
-虽隔千里，任愿你有好运触手可及。
-
-[GitHub](${social.github}) · [小红书](${social.xiaohongshu}) · [网易云音乐](${social.music}) · [875205504@qq.com](${social.email})`;
 
 let aboutMd: string | null = null;
 try {
@@ -24,6 +12,9 @@ try {
 } catch {
   // 数据库未初始化
 }
+// 前台生效内容（未保存过 = 默认文案）。编辑器回填也用这份源码，
+// 保证「编辑框所见 = 前台所显」——修改即全量替换，不会追加/丢失。
+const effectiveMd = aboutMd?.trim() ? aboutMd : DEFAULT_ABOUT_MD;
 
 // ── 社交链接图标（同步自旧 hexo 站「撩一撩」：链接前带品牌小图标）──
 // 渲染后按域名匹配注入内联 SVG，fill=currentColor 随主题/链接色联动，
@@ -48,14 +39,14 @@ const withIcons = (html: string) =>
     // 图标↔图标之间的「·」分隔符已无意义，清掉，间距交给 CSS
     .replace(/(<\/svg><\/a>)(?: · )(?=<a href="[^"]+" class="social-link")/g, '$1');
 
-const aboutHtml = withIcons(renderMarkdown(aboutMd?.trim() ? aboutMd : DEFAULT_ABOUT_MD));
+const aboutHtml = withIcons(renderMarkdown(effectiveMd));
 ---
 
 <Layout title="INFO" description={`艺术家简介 · ${site.nameZh}`} activePath="/about/">
   <div class="prose-page" data-ek-about>
     <h1>INFO</h1>
     <div class="prose" set:html={aboutHtml} />
-    <!-- EditKit 回填编辑框用：原始 Markdown（HTML 注释不渲染；set:html 避免实体转义） -->
-    <Fragment set:html={`<!--EK_ABOUT_MD_START-->${aboutMd ?? ''}<!--EK_ABOUT_MD_END-->`} />
+    <!-- EditKit 回填编辑框用：生效的 Markdown 源码（含默认文案，未保存过也不回空框） -->
+    <Fragment set:html={`<!--EK_ABOUT_MD_START-->${effectiveMd}<!--EK_ABOUT_MD_END-->`} />
   </div>
 </Layout>
