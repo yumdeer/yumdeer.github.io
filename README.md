@@ -1,6 +1,22 @@
 
 
-# Photography Portfolio + Blog — Astro Template
+# flowerdeer.cn — 张鹿溪摄影集
+
+> **本仓库已从上游静态模板改造为在线管理架构**，与下方模板文档描述的"纯静态站"不同：
+>
+> - **Astro 7 SSR** 跑在 **Cloudflare Workers** 上（不是 Pages），push `main` 自动部署
+> - 内容全在云端：**D1** 数据库存文章/项目/账号（7 张表，含 `site_settings` 键值配置），**R2** 存照片/音频
+> - 带**管理后台**（`/admin`）：传照片（浏览器端压缩）、Markdown 文章编辑器、音乐上传、简介编辑
+> - 带**前台就地编辑**（登录后从后台「前台编辑」进入）：照片墙悬停改标题/删图、项目页改元信息、关于页 ✎ 编辑简介
+> - 播放器（默认曲目/顺序/随机）、项目页放映模式、照片跨项目移动、改 slug 自动迁移 R2、按项目隐藏主页显示墙
+>
+> **从零搭建完整指南（强烈推荐）**：[docs/从零搭建到上线.md](./docs/从零搭建到上线.md) —— 面向零基础，含 Cloudflare 控制台每一步截图级说明和真实踩坑实录。
+>
+> 以下为上游模板（XD-QIN/astro-photo-folio）的原始英文文档，仅作参考；其中"静态构建、assets 目录放照片"等章节与当前架构不符，以中文指南为准。
+
+---
+
+# Photography Portfolio + Blog — Astro Template（上游模板文档）
 
 A minimal, fast photography portfolio with two blogs and a fixed left-hand
 navigation (**Digital · Analog · Calendar · Tech Blog · Photo Blog · About ·
