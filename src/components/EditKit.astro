@@ -198,6 +198,28 @@ const { email } = Astro.props;
     border-radius: 8px;
     cursor: pointer;
   }
+
+  /* 上传方式选择（本地文件 / 粘贴链接）：两张大按钮 */
+  .ek-up-ways {
+    display: grid;
+    gap: 10px;
+    margin-top: 12px;
+  }
+  .ek-way {
+    border: 1px solid #e2e2e6;
+    background: #fafafa;
+    font: inherit;
+    font-size: 13px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.15s, color 0.15s;
+  }
+  .ek-way:hover {
+    background: #111;
+    color: #fff;
+  }
   .ek-danger-btn {
     border: 1px solid rgba(192, 57, 43, 0.4);
     background: #fff;
@@ -374,8 +396,9 @@ const { email } = Astro.props;
   const MAX_THUMB = 800;
   const MAX_FULL = 2400;
 
-  async function processFile(file: File) {
-    const bmp = await createImageBitmap(file);
+  // File 与 URL 导入共用：createImageBitmap 只看字节，Blob 即可
+  async function processImage(blob: Blob, name: string) {
+    const bmp = await createImageBitmap(blob);
     const scaleSide = (max: number) => {
       const s = Math.min(1, max / Math.max(bmp.width, bmp.height));
       return [Math.round(bmp.width * s), Math.round(bmp.height * s)] as const;
@@ -402,7 +425,7 @@ const { email } = Astro.props;
     bc.getContext('2d')!.drawImage(bmp, 0, 0, bc.width, bc.height);
 
     return {
-      name: file.name,
+      name,
       title: '',
       thumbB64: await toWebpB64(tw, th, 0.8),
       fullB64: await toWebpB64(fw, fh, 0.82),
@@ -412,31 +435,57 @@ const { email } = Astro.props;
     };
   }
 
-  // ── 上传照片（逐张压缩 → 逐张 POST → reload）──
+  // ── 上传照片（逐张处理 → 逐张 POST → reload）──
   // 逐张上传：单请求只带一张，避免一次性打包十几 MB 触发 Workers
   // CPU/请求限制导致卡死或部分丢图；失败只影响当前张并汇总提示。
-  async function uploadPhotos(projectSlug: string, files: File[]) {
-    if (!files.length) return;
+  // items 统一本地文件与 URL 链接两种来源：get() 负责取字节 + 压缩。
+  type PhotoPayload = Awaited<ReturnType<typeof processImage>>;
+  async function uploadPhotos(
+    projectSlug: string,
+    items: { label: string; get: () => Promise<PhotoPayload> }[],
+  ) {
+    if (!items.length) return;
     const failed: string[] = [];
-    for (let i = 0; i < files.length; i++) {
-      toast(`压缩中 ${i + 1}/${files.length}…`);
-      const photo = await processFile(files[i]);
-      toast(`上传中 ${i + 1}/${files.length}…`);
+    for (let i = 0; i < items.length; i++) {
+      toast(`处理中 ${i + 1}/${items.length}…`);
+      let photo: PhotoPayload;
+      try {
+        photo = await items[i].get();
+      } catch (err) {
+        failed.push(`${items[i].label}（${(err as Error).message}）`);
+        continue;
+      }
+      toast(`上传中 ${i + 1}/${items.length}…`);
       try {
         await api('/api/admin/photos', {
           method: 'POST',
           body: JSON.stringify({ projectSlug, photos: [photo] }),
         });
       } catch {
-        failed.push(files[i].name);
+        failed.push(items[i].label);
       }
     }
     if (failed.length) {
-      toast(`成功 ${files.length - failed.length} 张，失败 ${failed.length} 张：${failed.join('、')}`);
+      toast(`成功 ${items.length - failed.length} 张，失败 ${failed.length} 张：${failed.join('、')}`);
       await new Promise((r) => setTimeout(r, 3500));
     }
     location.reload();
   }
+
+  // URL → 图片字节：走同源代理（外链直连 canvas 会跨域污染），再复用压缩管线
+  const fetchUrlItem = (u: string) => ({
+    label: u,
+    get: async () => {
+      const r = await fetch(`/api/admin/fetch-image?url=${encodeURIComponent(u)}`);
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+      const blob = await r.blob();
+      let name = 'photo';
+      try {
+        name = decodeURIComponent(new URL(u).pathname.split('/').filter(Boolean).pop() ?? '') || 'photo';
+      } catch {}
+      return processImage(blob, name);
+    },
+  });
 
   // ── 文章编辑（前台就地：左 Markdown / 右实时预览）────────────────────
   // 与后台编辑器同源的图片上传（1600px webp 压缩 → R2），成功后插入光标处
@@ -760,14 +809,50 @@ const { email } = Astro.props;
 
       if (act === 'upload') {
         const projSlug = location.pathname.match(/^\/project\/([^/]+)\/?$/)?.[1];
-        const pickFiles = () => {
+        const pickFiles = (slug: string) => {
           const input = $('#ek-files') as HTMLInputElement;
           input.value = '';
-          input.onchange = () => uploadPhotos(projSlug, [...(input.files ?? [])]);
+          input.onchange = () =>
+            uploadPhotos(slug, [...(input.files ?? [])].map((f) => ({ label: f.name, get: () => processImage(f, f.name) })));
           input.click();
         };
+        // 粘贴链接导入（每行一个，经同源代理拉取后与本地照片同一压缩管线）
+        const pickUrls = (slug: string) => {
+          openModal('粘贴图片链接', `
+            <label class="ek-field">每行一个链接
+              <textarea id="ek-urls" rows="5" placeholder="https://example.com/photo.jpg"></textarea>
+            </label>
+            <div class="ek-actions">
+              <button type="button" class="ek-cancel" data-close>取消</button>
+              <button type="button" class="ek-primary" id="ek-urls-go">导入</button>
+            </div>`);
+          $('#ek-urls-go')!.addEventListener('click', () => {
+            const urls = ($('#ek-urls') as HTMLTextAreaElement).value
+              .split('\n').map((s) => s.trim()).filter(Boolean);
+            if (!urls.length) return;
+            closeModal();
+            void uploadPhotos(slug, urls.map(fetchUrlItem));
+          });
+        };
+        // 本地 / 链接 双入口（首页先选项目）
+        const chooseHow = (slug: string) => {
+          openModal('上传照片', `
+            <div class="ek-up-ways">
+              <button type="button" class="ek-way" id="ek-way-file">选择本地图片（可多选）</button>
+              <button type="button" class="ek-way" id="ek-way-url">粘贴图片链接（每行一个）</button>
+            </div>
+            <div class="ek-actions">
+              <button type="button" class="ek-cancel" data-close>取消</button>
+            </div>`);
+          $('#ek-way-file')!.addEventListener('click', () => {
+            closeModal();
+            pickFiles(slug);
+          });
+          $('#ek-way-url')!.addEventListener('click', () => pickUrls(slug));
+        };
+
         if (projSlug) {
-          pickFiles(); // 项目页：直传当前项目
+          chooseHow(projSlug); // 项目页
         } else {
           // 首页：先选项目
           const r = await api('/api/admin/projects');
@@ -782,17 +867,20 @@ const { email } = Astro.props;
                 ${projects.map((p) => `<option value="${p.slug}">${p.title}${p.year ? ` (${p.year})` : ''}</option>`).join('')}
               </select>
             </label>
+            <div class="ek-up-ways">
+              <button type="button" class="ek-way" id="ek-way-file">选择本地图片（可多选）</button>
+              <button type="button" class="ek-way" id="ek-way-url">粘贴图片链接（每行一个）</button>
+            </div>
             <div class="ek-actions">
               <button type="button" class="ek-cancel" data-close>取消</button>
-              <button type="button" class="ek-primary" id="ek-up-go">选择图片</button>
             </div>`);
-          $('#ek-up-go')!.addEventListener('click', () => {
+          $('#ek-way-file')!.addEventListener('click', () => {
             const slug = ($('#ek-up-proj') as HTMLSelectElement).value;
             closeModal();
-            const input = $('#ek-files') as HTMLInputElement;
-            input.value = '';
-            input.onchange = () => uploadPhotos(slug, [...(input.files ?? [])]);
-            input.click();
+            pickFiles(slug);
+          });
+          $('#ek-way-url')!.addEventListener('click', () => {
+            pickUrls(($('#ek-up-proj') as HTMLSelectElement).value);
           });
         }
       }

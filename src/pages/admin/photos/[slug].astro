@@ -26,6 +26,10 @@ if (!project) return Astro.redirect('/404');
       <input type="file" accept="image/*" multiple id="file-input" />
       选择图片（可多选）— 浏览器自动压缩为 webp 后上传
     </label>
+    <label>
+      或粘贴图片链接（每行一个）
+      <textarea id="url-input" rows="3" placeholder="https://example.com/photo.jpg" style="width:100%;font:inherit"></textarea>
+    </label>
     <div class="admin-progress" id="progress" hidden>
       <div class="admin-progress-bar"><div class="admin-progress-fill" id="progress-fill"></div></div>
       <span class="admin-progress-text" id="progress-text"></span>
@@ -61,8 +65,9 @@ if (!project) return Astro.redirect('/404');
   const MAX_THUMB = 800;
   const MAX_FULL = 2400;
 
-  async function processFile(file: File) {
-    const bmp = await createImageBitmap(file);
+  // File 与 URL 导入共用：createImageBitmap 只看字节，Blob 即可
+  async function processImage(blob: Blob, name: string) {
+    const bmp = await createImageBitmap(blob);
     const scaleSide = (max: number) => {
       const s = Math.min(1, max / Math.max(bmp.width, bmp.height));
       return [Math.round(bmp.width * s), Math.round(bmp.height * s)] as const;
@@ -91,7 +96,7 @@ if (!project) return Astro.redirect('/404');
     const blurDataUrl = bc.toDataURL('image/webp', 0.5);
 
     return {
-      name: file.name,
+      name,
       title: '',
       thumbB64: await toWebpB64(tw, th, 0.8),
       fullB64: await toWebpB64(fw, fh, 0.82),
@@ -106,8 +111,10 @@ if (!project) return Astro.redirect('/404');
   document.getElementById('upload-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const input = document.getElementById('file-input') as HTMLInputElement;
+    const urlInput = document.getElementById('url-input') as HTMLTextAreaElement;
     const files = [...(input.files ?? [])];
-    if (!files.length) return alert('先选择图片');
+    const urls = urlInput.value.split('\n').map((s) => s.trim()).filter(Boolean);
+    if (!files.length && !urls.length) return alert('先选择图片或粘贴图片链接');
 
     const btn = document.getElementById('upload-btn') as HTMLButtonElement;
     const progress = document.getElementById('progress') as HTMLElement;
@@ -136,27 +143,57 @@ if (!project) return Astro.redirect('/404');
         xhr.send(JSON.stringify({ projectSlug: slug, photos: [photo] }));
       });
 
+    // URL → 文件名（取路径末段；无扩展名/空段时兜底 photo，服务端 slugify 会清洗）
+    const nameFromUrl = (u: string) => {
+      try {
+        const last = new URL(u).pathname.split('/').filter(Boolean).pop() ?? '';
+        return decodeURIComponent(last) || 'photo';
+      } catch {
+        return 'photo';
+      }
+    };
+
+    // 文件与 URL 统一队列：同一套 压缩→上传→进度 流程
+    const items: { label: string; get: () => Promise<ReturnType<typeof processImage>> }[] = [
+      ...files.map((f) => ({ label: f.name, get: () => processImage(f, f.name) })),
+      ...urls.map((u) => ({
+        label: u,
+        get: async () => {
+          const r = await fetch(`/api/admin/fetch-image?url=${encodeURIComponent(u)}`);
+          if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+          const blob = await r.blob();
+          return processImage(blob, nameFromUrl(u));
+        },
+      })),
+    ];
+
     const failed: string[] = [];
-    for (let i = 0; i < files.length; i++) {
-      setFill((i / files.length) * 100);
-      setText(`压缩中 ${i + 1}/${files.length}…`);
-      const photo = await processFile(files[i]);
+    for (let i = 0; i < items.length; i++) {
+      setFill((i / items.length) * 100);
+      setText(`压缩中 ${i + 1}/${items.length}…`);
+      let photo: Awaited<ReturnType<typeof processImage>>;
+      try {
+        photo = await items[i].get();
+      } catch (err) {
+        failed.push(`${items[i].label}（${(err as Error).message}）`);
+        continue;
+      }
       try {
         await uploadOne(photo, (pct) => {
           // 总条 = 已完成张数 + 当前张的字节进度，全部按张数归一
-          setFill(((i + pct / 100) / files.length) * 100);
-          setText(`上传中 ${i + 1}/${files.length}（${Math.round(pct)}%）`);
+          setFill(((i + pct / 100) / items.length) * 100);
+          setText(`上传中 ${i + 1}/${items.length}（${Math.round(pct)}%）`);
         });
       } catch (err) {
-        failed.push(`${files[i].name}（${(err as Error).message}）`);
+        failed.push(`${items[i].label}（${(err as Error).message}）`);
       }
     }
     setFill(100);
 
     if (failed.length) {
       alert(
-        `成功 ${files.length - failed.length} 张，失败 ${failed.length} 张：\n\n${failed.join('\n')}\n\n` +
-          '失败的可稍后重试（重新选择文件再传一遍即可）。',
+        `成功 ${items.length - failed.length} 张，失败 ${failed.length} 张：\n\n${failed.join('\n')}\n\n` +
+          '失败的可稍后重试（重新选择/粘贴再传一遍即可）。',
       );
     }
     location.reload();
