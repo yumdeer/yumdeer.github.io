@@ -393,7 +393,7 @@ src/
 │   └── galleries.ts    # ← Optional per-photo captions for the galleries
 ├── lib/photos.ts       # web-resolution image rendering (MAX_WEB)
 ├── layouts/            # Layout.astro, BlogPost.astro
-├── pages/              # index (Digital), analog, calendar, about, contact, blog/*
+├── pages/              # index (Digital), analog, calendar, about, contact, blog/*, tree (3D 场景页)
 ├── styles/global.css
 └── config.ts           # ← name, nav, social links  (START HERE)
 scripts/
@@ -402,6 +402,9 @@ scripts/
 ├── generate-placeholders.mjs     # placeholder photos + OG share image
 └── strip-unreferenced-assets.mjs # post-build: removes orphaned originals
 ```
+
+3D 场景页 (`/tree/`) 的结构、地区配置、程序化椰树与布达拉宫实现细节见
+[`docs/3D-场景页-tree.md`](docs/3D-场景页-tree.md)。
 
 ---
 
