@@ -1406,7 +1406,7 @@
       // 强度从 0.35 收到 0.12：动漫风的山是平涂色块，岩纹一重就变成"贴了张照片"
       const mtnRock = { tex: { value: rockDetailTexture() as THREE.Texture }, amt: { value: 0.07 } };
       injectSnowGold(mtnMat, mtnOpen, mtnRock, true);
-      // 山环几何来自 Blender（生成脚本 blender-mcp/assets/mountains.py）：
+      // 山环几何来自 Blender（生成脚本 tools/blender/mountains.py）：
       // 三层环绕山脊，每层是一条带冲沟、山嘴的实地形带（山脚在 -22，脊线在
       // 262/398/574m 外逐层升高）。逐顶点的高度比例、坡度、层雾权重仍在
       // 运行时算，季节换色 / 雪线 / 大气透视 / 日照金山的逻辑完全不变。
@@ -4274,7 +4274,7 @@
         }
       }
 
-      // 地标山体来自 Blender（生成脚本 blender-mcp/assets/mountains.py），只带几何。
+      // 地标山体来自 Blender（生成脚本 tools/blender/mountains.py），只带几何。
       // 这里按坡度把顶点色压出阳坡/阴坡，再叠一层低频斑避免整块山是一层塑料色；
       // 顶点色只放明暗（灰阶），色相交给材质的 color
       function shadeHill(mesh: THREE.Mesh) {
@@ -4336,7 +4336,7 @@
         hedge.instanceMatrix.needsUpdate = true;
         if (hedge.instanceColor) hedge.instanceColor.needsUpdate = true;
         g.add(hedge);
-        // 对岸小山：Blender 里真建模导出的（生成脚本 blender-mcp/assets/mountains.py）。
+        // 对岸小山：Blender 里真建模导出的（生成脚本 tools/blender/mountains.py）。
         // 主峰 + 两个次峰、坡面冲沟都是实体几何，不再是压扁的低模球；
         // 塔立在主峰的平顶上（模型原点在山脚地面中心）
         const hill = new THREE.Group();
@@ -4358,7 +4358,7 @@
           .catch(() => {
             // 模型缺失时保留空组：湖对岸少一座山，湖景其余部分照常
           });
-        // 塔：雷峰塔，Blender 里真建模导出的（生成脚本 blender-mcp/assets/pagoda.py）。
+        // 塔：雷峰塔，Blender 里真建模导出的（生成脚本 tools/blender/pagoda.py）。
         // 八角五层、须弥座、平座栏杆、出檐筒瓦、塔刹都是实体几何；420m 外隔着雾气
         // 主要看层数与剪影，模型原点在台基底面中心，按原占位塔的总高（约 39m）缩放。
         const tower = new THREE.Group();
@@ -4382,7 +4382,7 @@
             // 模型缺失时保留空组：远景少一座塔，其余湖景照常
           });
         // 湖心亭 + 折桥：西湖最经典的构图是"木栈桥折进湖里，尽头一座亭子浮在水上"。
-        // 亭子是 Blender 里真建模导出的（生成脚本 blender-mcp/assets/pavilion.py）：
+        // 亭子是 Blender 里真建模导出的（生成脚本 tools/blender/pavilion.py）：
         // 双层攒尖顶、斗拱、筒瓦瓦当都是实体几何，不再是两个锥体的剪影。
         // 模型原点在台基底面中心，台基高 0.45m，所以整体取 deckY - 0.27，
         // 让台面正好落在原来那块 9.6×0.36 方台的上沿。

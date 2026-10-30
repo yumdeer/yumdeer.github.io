@@ -60,8 +60,11 @@ public/textures/
   - 台地：`PROF` 分段线性剖面 + smoothstep；宫殿下方由台地 mask 削平，
     南坡则按模型台基逐级缓降（见下条 `apron(z)`）
 - **布达拉宫模型（GLB 承担，按实景南立面建模）**
-  - 模型源文件 `potala.py`（位于 `~/blender-mcp/assets/`），
-    通过 Blender headless MCP 重新导出：`python3 ~/blender-mcp/mcp_server.py --exec "exec(open('.../potala.py').read())"`
+  - 模型源文件 `tools/blender/potala.py`（连同共用的 `bg_common.py` 一起入库；
+    `tools/blender/` 是建模脚本的唯一真源，`~/blender-mcp` 只是 Blender 运行时，
+    不要再往里放脚本副本），
+    通过 Blender headless MCP 重新导出：`python3 ~/blender-mcp/mcp_server.py --exec "exec(open('~/yumdeer.github.io/tools/blender/potala.py').read())"`
+    （雷峰塔 `pagoda.py`、亭子 `pavilion.py`、山环 `mountains.py` 同样在 `tools/blender/`）
   - 输出 `public/models/potala_palace.glb`，**改完必须先 `npm run build` 再重启 preview**，
     否则预览拿到的还是 `dist/` 里的旧模型
   - 模型单位：白墙墙顶 `z=0`、雪城台面 `z=-25.6`、裙墙到 `z=-40`；

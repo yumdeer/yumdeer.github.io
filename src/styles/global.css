@@ -190,10 +190,12 @@ img {
   }
 }
 
-/* 日间/夜间开关：与「播放器」同风格的轻量图标按钮。
+/* 日间/夜间开关 + 3D 场景入口：与「播放器」同风格的轻量图标按钮。
    图标用内联 SVG + currentColor（☀/🌙 字符会被部分环境强制渲染成
-   彩色 emoji，一黑一黄不统一）；.is-dark 切换 sun/moon 显示 */
-.theme-toggle {
+   彩色 emoji，一黑一黄不统一；🌲 同理会被渲染成彩色 emoji）；
+   .is-dark 切换 sun/moon 显示 */
+.theme-toggle,
+.scene-link {
   border: 0;
   padding: 0;
   background: none;
@@ -205,12 +207,14 @@ img {
   transition: color 0.2s, transform 0.2s;
 }
 
-.theme-toggle:hover {
+.theme-toggle:hover,
+.scene-link:hover {
   color: #111;
   transform: scale(1.15);
 }
 
-.theme-toggle svg {
+.theme-toggle svg,
+.scene-link svg {
   display: block;
 }
 
@@ -451,11 +455,13 @@ img {
   color: #6b6b74;
 }
 
-.theme-dark .theme-toggle {
+.theme-dark .theme-toggle,
+.theme-dark .scene-link {
   color: #6b6b74;
 }
 
-.theme-dark .theme-toggle:hover {
+.theme-dark .theme-toggle:hover,
+.theme-dark .scene-link:hover {
   color: #ffffff;
 }
 
