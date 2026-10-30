@@ -342,9 +342,11 @@
       const seasonOfMonth = (m: number): SeasonKey =>
         m >= 2 && m <= 4 ? 'spring' : m >= 5 && m <= 7 ? 'summer' : m >= 8 && m <= 10 ? 'autumn' : 'winter';
 
+      // 时段也跟真实时间走：之前写死 14:00，晚上进页面还是下午的太阳光照。
+      const nowDate = new Date();
       const state = {
-        hour: 14,
-        season: seasonOfMonth(new Date().getMonth()),
+        hour: nowDate.getHours() + nowDate.getMinutes() / 60,
+        season: seasonOfMonth(nowDate.getMonth()),
         weather: 'sunny',
         weatherMode: 'live' as 'live' | 'mock',
         region: REGIONS[1],
@@ -6129,6 +6131,8 @@
       syncPills();
       updateInfo();
       fetchLiveWeather();
+      // 滑块与时钟文本按真实时间回填（HTML 里的 14 只是 SSR 占位）
+      hourInput.value = String(state.hour);
       $('hour-text').textContent = fmt(state.hour);
 
       let last = performance.now();
