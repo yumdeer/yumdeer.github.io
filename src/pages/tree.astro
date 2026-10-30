@@ -337,9 +337,14 @@
         tromso: { season: 'winter', weather: 'snow' },
       };
 
+      // 默认季节跟真实日期走：3-5 月春、6-8 月夏、9-11 月秋、12-2 月冬。
+      // 之前写死 'summer'，十月进来还是满屏绿树，跟现实季节对不上。
+      const seasonOfMonth = (m: number): SeasonKey =>
+        m >= 2 && m <= 4 ? 'spring' : m >= 5 && m <= 7 ? 'summer' : m >= 8 && m <= 10 ? 'autumn' : 'winter';
+
       const state = {
         hour: 14,
-        season: 'summer' as SeasonKey,
+        season: seasonOfMonth(new Date().getMonth()),
         weather: 'sunny',
         weatherMode: 'live' as 'live' | 'mock',
         region: REGIONS[1],
@@ -682,6 +687,27 @@
       // 逆光时树冠不至于整团糊成黑块（真实树冠靠叶间散射透光，这里用补光近似）
       const fillLight = new THREE.DirectionalLight(0xcfe0ff, 0);
       scene.add(fillLight, fillLight.target);
+
+      // 布达拉宫专用正面补光（只作用于宫殿：光源放在 layer 1，只有宫殿 mesh
+      // 也启用了 layer 1）。之前整片白墙靠 emissive 均匀自发光，所有朝向的面
+      // 亮度几乎一样，屋顶体块、窗洞、斜挡墙的明暗全被抹平——"渲染得太平整"
+      // 的根源就在这里。改成一盏从正面偏右上方打的方向光，让几何自己出明暗。
+      const palLight = new THREE.DirectionalLight(0xffeedd, 0);
+      palLight.position.set(72, 40, 108);
+      palLight.layers.set(1);
+      // 必须开阴影：正面几乎全是 +z 法向的面，方向光单独打上去只是整体变亮，
+      // 只有让凸出的体块/檐口投出影子，立面才有真正的层次。
+      palLight.castShadow = true;
+      palLight.shadow.mapSize.set(2048, 2048);
+      {
+        const pc = palLight.shadow.camera;
+        pc.left = -52; pc.right = 52; pc.top = 48; pc.bottom = -48;
+        pc.near = 20; pc.far = 320;
+        pc.updateProjectionMatrix();
+      }
+      palLight.shadow.bias = -0.0006;
+      palLight.shadow.normalBias = 0.06;
+      scene.add(palLight, palLight.target);
 
       // 圣诞树夜灯（点光，不投影）
       const xmasLight = new THREE.PointLight(0xffd9a0, 0, 16, 1.8);
@@ -1618,6 +1644,14 @@
           // 三亚的视线尽头应该是"海天相接"：山环在海上会读成一圈近处的绿丘
           mtnGroup.visible = state.region.id !== 'sanya';
           mtnGroup.scale.y = prof.mtnScale;
+          // 拉萨：宫堡被挪到 (-190,-360)（离镜头 406m），而山环最近一层 mtn_near
+          // 的脊线只有 262m——它会在宫堡前面的草坡上冒出几座灰色尖石，把大白墙
+          // 咬掉一块（用户问过"这个石头是哪里来的"）。这一层在拉萨整层撤掉，
+          // 背景交给 mtn_mid（398m）+ mtn_far（574m），宫堡前后层次反而更清楚。
+          const hideNear = state.region.id === 'lhasa';
+          mtnGroup.traverse((o) => {
+            if (/near/i.test(o.name)) o.visible = !hideNear;
+          });
           // 山环在每个地区都只留一面：开口侧的山脊压回地面，
           // 杭州仍是"三面云山一面城"，其余地区各留一面平原/雪原/峡湾出口
           const openAz = prof.openAz ?? 0;
@@ -4413,6 +4447,12 @@
       // 白宫 + 红宫 + 金顶的剪影，是拉萨一眼可辨的天际线；
       // 没有它，拉萨场景只是一片"有雪山的高原草甸"
       let lhasaScape: THREE.Group | null = null;
+      // 布达拉宫的南立面永远在太阳背面（正午太阳方位角 180° → 位于 -z，正是宫殿背后），
+      // 所以这面墙拿不到一点直射光，只剩天空散射 + 三成雾，渲染出来是 #89A0A5 的
+      // 冷灰蓝，跟实景的暖白墙 / 朱红宫完全对不上。
+      // 给这套材质加一层"自身补光"（emissive）把逆光欠下的亮度补回来，
+      // 强度按白昼缩放，夜里收掉——否则整座宫殿会在夜空里发亮。
+      const potalaMats: { m: THREE.MeshLambertMaterial; k: number }[] = [];
       function ensureLhasaScape() {
         if (lhasaScape) return;
         const g = new THREE.Group();
@@ -4425,30 +4465,30 @@
         //   南坡（朝镜头）从中脊下面切出一道近乎垂直的岩壁，
         //   崖脚接碎石/草甸坡，山脚埋进地面；
         //   宫殿坐在南坡削出来的台地上，山脊在它背后还高出近 30m —— 半山腰。
+        // 宫殿横向展开 2.75 倍后宽 226m，山体必须同时后退 + 左移：
+        // 还在 -290 处时宫堡会撑满整个画面右半边、右端顶到设置面板底下
         const hill = new THREE.Group();
-        hill.position.set(-75, -1.5, -290);
+        hill.position.set(-190, -1.5, -360);
         g.add(hill);
-        const HILL_H = 80;         // 主脊高度
-        const PLAT_Y = 46;         // 宫殿台地标高
-        const PLAT_X = 44;         // 台地半宽（宫殿半宽约 32m，两侧各留 12m 岩台）
+        const HILL_H = 68;         // 主脊高度（宫殿顶 ≈74，山脊必须压在它下面）
+        const PLAT_Y = 40.5;       // 宫殿台地标高（= 宫殿基座 40 + 0.5，正好压住墙脚接缝）
+        // 模型横向展开 2.75 倍后宫殿半宽 ≈113（台基 ≈124），台地必须一起加宽，
+        // 否则宫殿两端会悬在岩壁外面
+        const PLAT_X = 122;        // 台地半宽
         const PLAT_Z0 = 2;         // 台地北缘（山脊一侧）
         const PLAT_Z1 = 36;        // 台地南缘（崖口）
         const PAL_Z = 17;          // 宫殿中线：必须整个落在台地上，否则后墙会被脊线埋掉
-        const PAL_SINK = 6;        // 宫殿基座埋进台地
+        const PAL_SINK = 0.5;      // 宫殿基座埋进台地
         const pal = new THREE.Group();
         // 宫殿挂在山体上（不是 scene）：位置用山体局部坐标，改山体位置时一起走
         pal.position.set(0, PLAT_Y - PAL_SINK, PAL_Z);
         pal.scale.setScalar(1.2);
         hill.add(pal);
 
-        // 南坡地表高度采样：登山阶梯必须贴着坡面砌，否则远看就是一条悬空的板
-        let southY: (x: number, z: number) => number = () => 0;
-        // 山体反照率采样：阶梯挡墙直接取周边岩色，才不会被读成外贴的白/黑板
-        let albedoAt: (x: number, y: number) => THREE.Color = () => new THREE.Color(0x6b6259);
         let hillMat: THREE.MeshLambertMaterial | null = null;
         const ridgeGeo = (() => {
-          const NX = 150, NV = 46;
-          const L = 240;             // 山脊总长：宫堡占中间一段，两侧再接出岩嘴
+          const NX = 150, NV = 240;  // 竖向要够密，否则五级台基缓台会被插值成一片斜板
+          const L = 340;             // 山脊总长：宫殿横向展开后要占中间 2/3，两头留岩嘴
           const ss = smoothstepJS;
           const crestH = (x: number) => {
             const t = clamp(Math.abs(x) / (L * 0.5), 0, 1);
@@ -4482,15 +4522,16 @@
               + Math.sin(x * 0.58 + v * 12.0 - 0.6) * 0.16
               + Math.sin(x * 1.1 - v * 3.2 + 2.7) * 0.07) * band;
           };
-          southY = (x: number, z: number) => {
-            const W = halfS(x);
-            const q = clamp(z / W, 0, 1);
-            let y = crestH(x) * prof(q);
-            const inX = ss(PLAT_X + 14, PLAT_X - 8, Math.abs(x));
-            const inZ = ss(PLAT_Z0 - 3, PLAT_Z0 + 3, z) * ss(PLAT_Z1 + 3, PLAT_Z1 - 3, z);
-            const m = inX * inZ;
-            if (m > 0) y = lerp(y, PLAT_Y, m);
-            return y + rockN(x, q) * 7.0 * (1 - m);
+          // 南坡台基缓台：模型里的白色台基是削山砌出来的，坡面必须让出对应的高度，
+          // 否则台基要么整块埋进崖壁、要么悬在半坡。potala_palace.glb 现在是一整面
+          // 收分白墙（缩放 1.2 后宫前台面 y=40、墙脚雪城台 y=9.3），所以坡面沿墙面
+          // 走一条斜线落到雪城台，再往前落回自然坡——不能做成一级级台阶。
+          const apron = (z: number) => {
+            if (z <= 32.2) return PLAT_Y;
+            if (z <= 36.1) return lerp(PLAT_Y, 9.1, (z - 32.2) / (36.1 - 32.2));
+            if (z <= 41.4) return 9.1;
+            if (z <= 50) return lerp(9.1, -6, ss(41.4, 50, z));
+            return -6;
           };
           const pos: number[] = [], col: number[] = [], idx: number[] = [];
           const cGrass = new THREE.Color(0x5b6b3c);
@@ -4510,7 +4551,6 @@
             const k = 0.74 + 0.40 * strata;
             return out.multiplyScalar(k);
           };
-          albedoAt = (x, y) => albedo(x, y, new THREE.Color());
           for (let i = 0; i < NX; i++) {
             const x = -L / 2 + (i / (NX - 1)) * L;
             const hc = crestH(x);
@@ -4533,7 +4573,16 @@
               const inZ = ss(PLAT_Z0 - 3, PLAT_Z0 + 3, z) * ss(PLAT_Z1 + 3, PLAT_Z1 - 3, z);
               const m = inX * inZ;
               if (m > 0) y = lerp(y, PLAT_Y, m);
-              y += rockN(x, av) * 7.0 * (1 - m);
+              // 南坡台基缓台：模型里的白色台基是削山砌出来的，坡面必须让出对应的高度，
+              // 否则台基要么整块埋进崖壁、要么悬在半坡。缓台沿白墙斜面向下削，
+              // 最宽一级台基半宽 37.5×2.75×1.2 ≈ 124，缓台铺满它即可，两侧留出岩体
+              const apronX = ss(140, 126, Math.abs(x));
+              let apronKeep = 0;
+              if (apronX > 0 && z > 30) {
+                apronKeep = apronX;
+                y = lerp(y, apron(z), apronX);
+              }
+              y += rockN(x, av) * 7.0 * (1 - m) * (1 - apronKeep);
               pos.push(x, y, z);
               albedo(x, y, c);
               col.push(c.r, c.g, c.b);
@@ -4562,107 +4611,6 @@
           hill.add(new THREE.Mesh(ridgeGeo, hillMat));
         }
 
-        // 布达拉宫登山梯道：真迹是南坡上几段又宽又长的白色折返梯——
-        // 每段沿坡斜着横切一长条、到端点硬折返，梯身和护墙全部刷白。
-        // 远看是暗色岩坡上一道白色"之"字，这才是它最硬的识别特征。
-        // 之前做成一条 2.4m 宽的窄梯贴着崖面爬，300m 外只剩一条划痕。
-        {
-          const stairGeos: THREE.BufferGeometry[] = [];
-          const wallGeos: THREE.BufferGeometry[] = [];
-          const cTop = new THREE.Color(0xf2ede2);
-          const cSide = new THREE.Color(0xc4bcaa);
-          const cFace = new THREE.Color(0xa9a08c);
-          const cPara = new THREE.Color(0xfaf6ec);
-          const fill = (geo: THREE.BufferGeometry, c: THREE.Color) => {
-            const n = geo.attributes.position.count;
-            const col = new Float32Array(n * 3);
-            for (let v = 0; v < n; v++) {
-              col[v * 3] = c.r; col[v * 3 + 1] = c.g; col[v * 3 + 2] = c.b;
-            }
-            geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-          };
-          const WIDTH = 2.8;          // 梯道宽度（沿 z，即进深方向）：远处看要成一条白带
-          const STEP_H = 1.0;         // 单级抬升
-          // 一级踏步：踏面 + 外侧白色矮护墙 + 梯下砌到坡面的白墙
-          const pushStep = (x: number, y: number, zFace: number, dx: number) => {
-            const zc = zFace - WIDTH / 2;
-            const tread = new THREE.BoxGeometry(dx, STEP_H, WIDTH);
-            const col = new Float32Array(tread.attributes.position.count * 3);
-            const setFace = (i0: number, c: THREE.Color) => {
-              for (let v = i0; v < i0 + 4; v++) {
-                col[v * 3] = c.r; col[v * 3 + 1] = c.g; col[v * 3 + 2] = c.b;
-              }
-            };
-            // BoxGeometry 顶点顺序：+x, -x, +y, -y, +z, -z，每面 4 个顶点
-            setFace(0, cSide); setFace(4, cSide);
-            setFace(8, cTop); setFace(12, cSide);
-            setFace(16, cFace); setFace(20, cFace);
-            tread.setAttribute('color', new THREE.BufferAttribute(col, 3));
-            tread.translate(x, y - STEP_H / 2, zc);
-            stairGeos.push(tread);
-            // 外侧矮护墙：白墙是"白梯"最抢眼的元素，也是折返梯的轮廓线
-            const par = new THREE.BoxGeometry(dx * 1.06, 0.95, 0.45);
-            fill(par, cPara);
-            par.translate(x, y + 0.47, zFace - 0.22);
-            stairGeos.push(par);
-            // 梯身下面的砌体：一直砌到坡面，和护墙同色（真迹整面都是白墙）
-            const wallTop = y - STEP_H;
-            const wallH = wallTop - southY(x, zFace) + 0.7;
-            if (wallH > 0.8) {
-              const wall = new THREE.BoxGeometry(dx * 1.02, wallH, WIDTH * 0.98);
-              fill(wall, cSide);
-              wall.translate(x, wallTop - wallH / 2, zc);
-              wallGeos.push(wall);
-            }
-          };
-          // 坡面反查：给定标高，找南坡上对应的 z（坡面高度随 z 减小而升高）
-          const surfaceZ = (x: number, yt: number) => {
-            let lo = 36.0, hi = 80;
-            if (southY(x, lo) <= yt) return lo;
-            if (southY(x, hi) >= yt) return hi;
-            for (let k = 0; k < 20; k++) {
-              const m = (lo + hi) / 2;
-              if (southY(x, m) > yt) lo = m; else hi = m;
-            }
-            return (lo + hi) / 2;
-          };
-          // 两段折返：沿 x 横切坡面上升，到端点硬折返，最后接到第一道白台基
-          const FLIGHTS: [number, number, number, number][] = [
-            [-72, -34, 4.4, 17],              // 下段：向东横切
-            [-34, -64, 17, 30],               // 中段：折返向西
-            [-64, -40, 30, PLAT_Y - 0.7],     // 上段：再折返向东，收进台地口
-          ];
-          for (const [xa, xb, ya, yb] of FLIGHTS) {
-            const n = Math.max(3, Math.round((yb - ya) / STEP_H));
-            const dxStep = (Math.abs(xb - xa) / n) * 1.06;
-            let prevZ = 82;
-            for (let i = 0; i < n; i++) {
-              const f = (i + 0.5) / n;
-              const x = lerp(xa, xb, f);
-              const y = lerp(ya, yb, f);
-              // 目标取 y-0.4：整级踢面和踏面都露在坡面之外，
-              // 否则踏步全埋进坡里，只剩一道贴着崖面的平整挡墙
-              const z = Math.min(surfaceZ(x, y - 0.4), prevZ - 0.02);
-              prevZ = z;
-              pushStep(x, y, z + 0.5, dxStep);
-            }
-          }
-          const stair = new THREE.Mesh(
-            mergeGeometries(stairGeos)!,
-            // 用无光照材质：梯道要读成刷白的砌体，不能被绿色地面反光染成橄榄色
-            new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true }),
-          );
-          for (const gg of stairGeos) gg.dispose();
-          stair.castShadow = false;
-          stair.receiveShadow = false;
-          hill.add(stair);
-          const wallMesh = new THREE.Mesh(
-            mergeGeometries(wallGeos)!,
-            new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true }),
-          );
-          for (const gg of wallGeos) gg.dispose();
-          hill.add(wallMesh);
-        }
         loadGLB('/models/potala_palace.glb')
           .then((gltfScene) => {
             const model = gltfScene.clone(true);
@@ -4670,9 +4618,35 @@
               const mesh = child as THREE.Mesh;
               if (!mesh.isMesh) return;
               const srcMat = mesh.material as THREE.MeshStandardMaterial;
-              mesh.material = new THREE.MeshLambertMaterial({
-                color: srcMat.color ? srcMat.color.clone() : 0xffffff,
+              const base = srcMat.color ? srcMat.color.clone() : new THREE.Color(0xffffff);
+              const mat = new THREE.MeshLambertMaterial({
+                color: base,
+                emissive: base.clone(),
               });
+              // 场景雾是 #88aacc，在宫殿这个距离吃掉约三分之一，会把朱红宫压成
+              // 粉紫、把金顶压成土黄；而实景照片里宫殿本身是清晰饱和的，只有背后
+              // 的雪山是雾。所以这座地标关掉雾，颜色直接按反照率出图。
+              mat.fog = false;
+              // 南立面永远逆光，白墙必须大幅自补光；红宫/金顶本身饱和，补多了会
+              // 连同高光一起被 ACES 压成粉，所以只补一部分；窗洞和灌木不补。
+              // 金顶分三档：脊线/宝顶（gold_hi）留高补光当"亮线"，坡面（gold / gold_dk）
+              // 只补一点——补多了四个坡面亮度被拉平，远景就是一坨金色，没有层次。
+              const nm = (srcMat.name || '').toLowerCase();
+              const k = nm.includes('white') || nm.includes('sill') ? 0.30
+                : nm.includes('gold_hi') ? 0.95
+                  : nm.includes('gold_dk') ? 0.34
+                    : nm.includes('gold') ? 0.48
+                      : nm.includes('red') || nm.includes('band') ? 0.42
+                        : nm.includes('amber') ? 0.30
+                          : nm.includes('bush') ? 0.0
+                            : 0.40;
+              potalaMats.push({ m: mat, k });
+              mesh.material = mat;
+              // 只让 palLight（layer 1）照到宫殿，渲染层仍用默认 layer 0
+              mesh.layers.enable(1);
+              // 体块必须互相投影，立面上才有真实的纵向明暗
+              mesh.castShadow = true;
+              mesh.receiveShadow = true;
             });
             pal.add(model);
           })
@@ -5824,6 +5798,15 @@
         // 半球光代表天空散射：夜里必须跟着收，否则满功率的淡蓝天光会把
         // 叶片刷成青白色（三亚椰树 22:00 的"薄荷叶"就是这么来的）
         hemi.intensity = 0.2 + 0.4 * s.daylight;
+
+        // 逆光地标（布达拉宫）的自身补光：白天补足，夜里收掉
+        if (potalaMats.length) {
+          const lift = 0.06 + 0.55 * s.daylight * (w === 'sunny' ? 1 : w === 'cloudy' ? 0.9 : 0.78);
+          for (const p of potalaMats) p.m.emissiveIntensity = lift * p.k;
+          // 正面方向光承担大部分亮度：它以固定方向打光，凸出的体块、窗洞、
+          // 斜挡墙才会各自出明暗，自发光只负责兜底不压成灰蓝
+          palLight.intensity = 1.05 * s.daylight * (w === 'sunny' ? 1 : w === 'cloudy' ? 0.88 : 0.7);
+        }
 
         // 太阳精灵（雨雪不画；低角度更大更红）
         const sunVisible = s.alt > -3 && w !== 'rain' && w !== 'snow';
