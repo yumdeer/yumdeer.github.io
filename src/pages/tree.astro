@@ -4408,17 +4408,17 @@
             break;
           }
         }
-        // 桥总长压在 45m 左右：之前从岸上一路折到 75m 外的亭子，水上整整 88m，
-        // 远看就是一条望不到头的长堤（用户反馈"太长了"）。
-        // 现在亭子跟着桥往岸边收——进湖 44m；最后一跨 16m 沿亭子正面
+        // 桥总长压在 23m 左右：之前从岸上一路折到 75m 外的亭子，水上整整 88m，
+        // 远看就是一条望不到头的长堤（用户两次反馈"太长"）。
+        // 现在让亭子贴着岸边——进湖只有 22m；最后一跨 9m 沿亭子正面
         // 方向 (0.912, 0.410) 走，模型开间（54°）正好正对桥头。
-        const P: [number, number] = [sx - ux * 44, sz - uz * 44];
-        const B: [number, number] = [P[0] + 0.912 * 16, P[1] + 0.410 * 16];
+        const P: [number, number] = [sx - ux * 22, sz - uz * 22];
+        const B: [number, number] = [P[0] + 0.912 * 9, P[1] + 0.410 * 9];
         // 中间按九曲桥的走法往右折一下，别又是一块直板
         const mx = (sx + B[0]) / 2, mz = (sz + B[1]) / 2;
         const lx = B[0] - sx, lz = B[1] - sz;
         const ll = Math.hypot(lx, lz);
-        const A: [number, number] = [mx - (lz / ll) * 2.5, mz + (lx / ll) * 2.5];
+        const A: [number, number] = [mx - (lz / ll) * 1.2, mz + (lx / ll) * 1.2];
         const pts: [number, number][] = [[sx, sz], A, B, P];
         for (let i = 0; i < pts.length - 1; i++) {
           const [x0, z0] = pts[i], [x1, z1] = pts[i + 1];
