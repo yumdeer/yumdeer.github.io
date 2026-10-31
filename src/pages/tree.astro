@@ -4403,23 +4403,22 @@
         // 让台面正好落在原来那块 9.6×0.36 方台的上沿。
         const woodMat = new THREE.MeshLambertMaterial({ color: 0x8a6a4c });
         const deckY = WATER_Y + 0.55;
-        // 栈桥的岸线端要正好落在水线上（用户指的那条红线）：之前是按"地面高出水面 0.28m"
-        // 找岸、再往草坡压 1.2m，等于把桥往岸上多铺了近 9m，看着像一条跨过草地的长堤。
-        // 现在取第一个地面已经接近水面的点，只往草坡压 0.6m 让最后一根立柱踏在实地上。
+        // 栈桥的岸线端要正好落在水线上（用户指的那条红线）：水线取"地面刚浮出水面"的位置，
+        // 不再往草坡上多铺几米。但桥面固定比水面高 0.55m，直接切在水线上会悬空（"断层"），
+        // 所以从水线再往岸里走 3m 做一段下沉引坡、把桥头埋进坡里：
+        // 上一版是把桥头压到水面以下 0.3m，结果桥头那截直接泡在水里，看着像沉了。
         const shoreDir: [number, number] = [13, 11];
         const dirLen = Math.hypot(shoreDir[0], shoreDir[1]);
         const ux = shoreDir[0] / dirLen, uz = shoreDir[1] / dirLen;
         let sx = -45, sz = -34;
         for (let d = 0; d <= 60; d += 0.5) {
           const x = -45 + ux * d, z = -34 + uz * d;
-          if (groundY(x, z) > WATER_Y + 0.05) {
-            sx = x + ux * 0.6; sz = z + uz * 0.6;
-            break;
-          }
+          if (groundY(x, z) > WATER_Y + 0.02) { sx = x; sz = z; break; }
         }
-        // 桥面比岸坡高 0.55m，若桥头直接切在水线上，就会在岸边悬空一截（用户截图里的"断层"）。
-        // 所以让靠岸这一跨从草坡里斜着升起来：桥头端压到地面以下 0.3m（埋进坡里），
-        // 到折弯处已经是正常桥面高度，水流下面照常是架空的栈桥。
+        // 桥面整体保持水平（deckY），桥头直接落在水线上；和岸坡的落差用一块石台填掉：
+        // 石台顶面与桥面齐平、底部扎到坡面以下，桥面顺着石台没入地面，不会留下悬空的缝。
+        // 前面几版想靠"引坡下沉"过渡，坡度方向和对齐都容易出错、视觉上总像断成两截，
+        // 改成这种"桥面 + 落地石台"的接法最稳。
         // 亭子就立在近岸的水面上，栈桥只做一小段从陆地过去的引桥：
         // 水面现在铺到 e<1.12（见 paintWater），离岸 20m 已经是开阔水面，
         // 不必再把桥拉成 70 多米、一路折弯的长堤。
@@ -4430,9 +4429,8 @@
         const lx = B[0] - sx, lz = B[1] - sz;
         const ll = Math.hypot(lx, lz);
         const A: [number, number] = [mx - (lz / ll) * 1.2, mz + (lx / ll) * 1.2];
-        const tipY = groundY(sx, sz) - 0.3;
         const pts: [number, number, number][] = [
-          [sx, tipY, sz], [A[0], deckY, A[1]], [B[0], deckY, B[1]], [P[0], deckY, P[1]],
+          [sx, deckY, sz], [A[0], deckY, A[1]], [B[0], deckY, B[1]], [P[0], deckY, P[1]],
         ];
         for (let i = 0; i < pts.length - 1; i++) {
           const [x0, y0, z0] = pts[i], [x1, y1, z1] = pts[i + 1];
@@ -4441,7 +4439,9 @@
           const ang = Math.atan2(x1 - x0, z1 - z0);
           // 先绕 Y 摆方向、再绕自身 X 抬坡度（YXZ 顺序）。不能直接用 setFromUnitVectors
           // 把 +Z 对到三维方向上——那样会把板子的宽度方向一起拧歪，桥面看着像翻了一块。
-          const pitch = Math.atan2(y1 - y0, flat);
+          // three.js 里 R_x(θ) 把 +Z 转到 (0, -sinθ, cosθ)，所以抬坡要取负号，
+          // 否则靠岸那跨会朝反方向倾斜，和相邻的一段错开一层（看着像断成两块）。
+          const pitch = -Math.atan2(y1 - y0, flat);
           const deck = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.22, len + 0.7), woodMat);
           deck.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
           deck.rotation.set(pitch, ang, 0, 'YXZ');
@@ -4464,6 +4464,14 @@
             }
           }
         }
+        // 桥头落地台：顶面与桥面平齐、底部扎进坡面以下，把桥面和岸坡之间那段落差填实，
+        // 视觉上桥面顺着这块木台落进草坡，不会悬空、也不会泡进水里。
+        const abut = new THREE.Mesh(new THREE.BoxGeometry(2.7, 1.3, 2.6), woodMat);
+        abut.position.set(sx + ux * 1.0, deckY + 0.11 - 0.65, sz + uz * 1.0);
+        abut.rotation.y = Math.atan2(ux, uz);
+        abut.receiveShadow = true;
+        abut.castShadow = true;
+        g.add(abut);
         const pav = new THREE.Group();
         pav.position.set(P[0], deckY - 0.27, P[1]);
         // 模型开间朝 three.js 的 -30°，转到桥头方向 (0.914, 0.411) 那边，台阶正对最后一段桥
