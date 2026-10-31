@@ -11,6 +11,22 @@
 > - 播放器（默认曲目/顺序/随机）、项目页放映模式、照片跨项目移动、改 slug 自动迁移 R2、按项目隐藏主页显示墙
 >
 > **从零搭建完整指南（强烈推荐）**：[docs/从零搭建到上线.md](./docs/从零搭建到上线.md) —— 面向零基础，含 Cloudflare 控制台每一步截图级说明和真实踩坑实录。
+
+> **接手 Agent 速览（换 agent / 换机器时先读这段）**
+>
+> - **部署**：push `main`（`git@github.com:yumdeer/yumdeer.github.io.git`）→ Cloudflare
+>   Workers Builds 自动构建，约 40~120s 生效；无需手动进控制台。复核方式：对比
+>   `dist/client/_astro/` 里的 chunk 文件名与 `curl -s https://flowerdeer.cn/<页面>/`
+>   引用的 chunk 名，hash 一致即已上线。
+> - **本地验证**：`npm run build` → `npx astro preview stop` → `npx astro preview --port 4334`。
+>   **改了代码必须重新 build 再重启 preview**（preview 服务的是 `dist/`），
+>   且重启必须走 `astro preview stop`，直接 pkill 会留下旧进程服务旧构建。
+> - **工作习惯**：先本地预览让用户确认效果，再提交推送；3D 场景用 Playwright 截图
+>   （脚本放 `/tmp`，模式见 3D 文档第 6 节），不要凭想象描述效果。
+> - **文档地图**：架构/后台/D1/R2/上线全流程看
+>   [docs/从零搭建到上线.md](./docs/从零搭建到上线.md)；`/tree/` 3D 场景的地区配置、
+>   Blender 建模脚本（`tools/blender/`）、湖心亭栈桥几何与一堆"不要回退"的坑看
+>   [docs/3D-场景页-tree.md](./docs/3D-场景页-tree.md)。
 >
 > 以下为上游模板（XD-QIN/astro-photo-folio）的原始英文文档，仅作参考；其中"静态构建、assets 目录放照片"等章节与当前架构不符，以中文指南为准。
 

@@ -9,7 +9,7 @@
 
 | id | 地区 | 场景要点 |
 | --- | --- | --- |
-| `hangzhou` | 杭州 | 湖面 + 湖心亭 + 雷峰塔，山环单侧开口（另一侧留出地平线） |
+| `hangzhou` | 杭州 | 湖面 + 湖心亭 + 无栏杆缓坡木栈桥 + 雷峰塔，山环单侧开口（另一侧留出地平线） |
 | `sanya` | 三亚 | 海天相接、无山环，程序化椰林 |
 | `shandong` | 山东 | 阔叶林 + 平原缓丘 |
 | `lhasa` | 拉萨 | 布达拉宫坐落红山，一整面收分大白墙从山脚砌到宫前，底部雪城与沿街店铺 |
@@ -25,7 +25,8 @@
 - **季节**：春/夏/秋/冬，驱动 `foliageMaterial()` / `woodMaterial()` 的贴图调色与叶色
 - **天气**：`#weather-pills`，可选实况（Open-Meteo，需要 `connect-src https://api.open-meteo.com`）或 `mock` 预设；
   实况拉取温度、云量、风速、降水，mock 用于离线/测试
-- **时段**：太阳高度角决定天光、阴影与天体位置
+- **时段**：太阳高度角决定天光、阴影与天体位置；`#in-hour` 默认取浏览器真实时间
+  （2026-10 起，不再是硬编码 14:00），拖动滑块可手动覆盖
 
 天气接口的 CSP 白名单在 `public/_headers`，新增外部接口时同步添加，否则线上会被拦截。
 
@@ -38,6 +39,9 @@ public/textures/
   ├── ground/            # 地表贴图
   ├── palm/  pine/  willow/   # 树种树皮/叶贴图
 ```
+
+杭州垂柳贴图已全部从 PNG 转成 **WebP**（2026-10，`f8d922e`）：整页首屏体积 27.1MB → 16.5MB。
+新增/替换贴图时一律用 WebP，不要再放回 PNG 原图。
 
 模型加载统一走 `ensureModel()`：`loadGLB` → `attachSpeciesTextures` → clone → bbox 归一化
 （`MODEL_SRC[k].height/spread`、`trunkFoot`）→ `rebuildTree()` 按材质名分类
@@ -207,6 +211,45 @@ public/textures/
   - `NV` 从 46 提到 240：竖向网格太粗时，缓台会被插值成一片斜板
   - 早期在 `tree.astro` 里手搭的梯道/小房已全部删除，改由 GLB 提供，避免重复
 
+## 4.5 湖心亭与栈桥（杭州，2026-10 定稿）
+
+栈桥 + 亭子的全部逻辑在 `tree.astro` 的 `const woodMat` 那一段（约 4400 行起）。
+最终形态是用户逐版截图确认出来的，**不要回退到下面这些历史方案**。
+
+### 当前几何
+
+- `WATER_Y = -0.55`；水面是 `CircleGeometry(292)`（早期 260 太小，湖盆边缘
+  `e≈1.05~1.1` 的地面已低于水面却没水覆盖，露出"干的水下地"，看起来像亭子被搬上岸）。
+  `inWater('hangzhou') = e < 1.02 || (e < 1.12 && groundY < WATER_Y)`，两处要一起改。
+- 岸线搜索：从 `(-45,-34)` 沿 `(13,11)` 方向步进，取第一个 `groundY > WATER_Y + 0.02`
+  的点作为水线 `(sx,sz)`。
+- 亭子 `P` 在离岸 20m 的水面上；`pav.position.y = deckY - 0.27`（GLB 原点在台基底面中心、
+  台基高 0.45m），台基底约 `-0.42`，**始终在水面之上**，不要再往下压。
+- 桥面：`deckY = WATER_Y + 0.40`（板中心），板宽 2.6、厚 0.22，亭子端桥面顶 ≈ `-0.04`。
+- **纯平接岸（用户明确要求"不要台阶"）**：没有任何台子/台阶。桥头端点向岸上多延 0.8m，
+  `endY = groundY(端点) - 0.11 - 0.03`（桥面顶与地面同高、再压 3cm 埋进草里）；
+  各跨高度按**累计路径长度线性插值**到 `deckY`，整条桥是约 2% 的均匀缓坡，
+  跨与跨之间没有折角。
+- **桥面无栏杆、无立柱**（用户要求）；亭子自身的围栏在 GLB 模型里，不受影响。
+
+### 旋转的坑（踩过两次，别再踩）
+
+三维对齐全靠 `deck.rotation.set(pitch, ang, 0, 'YXZ')`，其中
+`ang = atan2(dx,dz)`、`pitch = -atan2(dy, flat)`：
+
+1. **不能用 `Quaternion.setFromUnitVectors(+Z, dir)`**——最小旋转会把板宽方向一起拧歪，
+   桥面看着像"翻了一块"。
+2. **pitch 必须取负号**：three.js 的 `R_x(θ)` 把局部 `+Z` 转到 `(0,-sinθ,cosθ)`，
+   符号写反时靠岸那跨朝反方向倾斜，和相邻跨错开一层（"桥面分成了两截"）。
+
+### 已被用户否掉的方案（不要回退）
+
+- 88m / 45m 长堤式栈桥：太长，亭子只要离岸 20m。
+- 桥头"顶面齐平的落地木台"（`d6b4893`/`4bd6ee2`）：能消除断层，但木台凸出草坡，
+  视觉上仍是一个台阶，已被纯平缓坡方案取代。
+- 桥头压到水面以下（`tipY = groundY - 0.32` 之类）：桥头直接泡水，"像沉了"。
+- 桥面带栏杆：已按要求删除，不要再加回。
+
 ## 5. 渲染要点
 
 - **山环单侧开口**：`injectSnowGold()` 注入 `uOpenDir / uOpenCos / uCityMask`，
@@ -223,12 +266,35 @@ npx astro preview --port 4334  # 预览构建产物（改了代码必须重新 b
 ```
 
 调试截图脚本可放在 `/tmp`（Playwright），按地区切 `#in-region` 后截图，检查控制台 `errors`。
+本项目实际使用的 `/tmp/shot-tree.mjs` 模式：Chromium 启动参数
+`--use-gl=swiftshader --enable-unsafe-swiftshader`，`networkidle` 后等约 11s 让 GLB/贴图就绪；
+局部放大用 `browser.newPage({ deviceScaleFactor: 5~8 })` + `page.screenshot({ clip })`
+（clip 坐标是 CSS 像素，不是截图像素）。近景检查栈桥/亭子时，默认机位下亭子周围
+`clip {x:110,y:320,w:330,h:130}`、桥头 `{x:300,y:370,w:260,h:150}`（1280×800 视口）。
+OrbitControls 在 Playwright 里滚轮/拖拽基本无效，需要换机位时临时加
+`?cam=x,y,z,tx,ty,tz` URL 钩子直接写 `camera.position` / `controls.target`，**用完删掉再构建**。
 
 **重启 preview 必须走 `npx astro preview stop`**：直接 `pkill` 或让旧进程留着时，
 新进程只会打印 "Another astro preview server is already running" 然后退出，旧进程继续
 用**旧的 dist** 服务，`/models/*.glb` 甚至直接返回 500——看起来就像"改了没生效"。
 重启后先核对一次：`curl -s http://127.0.0.1:4334/models/potala_palace.glb | md5sum`
-必须等于 `public/models/potala_palace.glb` 的 md5。浏览器侧记得 Ctrl+Shift+R 强刷。
+必须等于 `public/models/potala_palace.glb` 的 md5。浏览器侧记得 Ctrl+Shift+R 强刷。另外不要 `pkill -f "astro preview"`：
+匹配模式会把自己的 shell 也杀掉（命令以 exit -1 收场），用 `npx astro preview stop`。
+
+### 线上部署与复核
+
+push `main` → Cloudflare Workers Builds 自动构建，约 40~120s 生效。复核方式
+（比"打开看看"可靠，因为 `_astro/*` 是 immutable 强缓存）：
+
+```bash
+ls dist/client/_astro | grep '^tree'                 # 本地新 chunk 名（内容寻址 hash）
+curl -s https://flowerdeer.cn/tree/ | grep -o '/_astro/tree[^"]*\.js' | head -1
+# 两边 hash 一致即说明线上已在跑新构建；不一致就等 20s 再查
+```
+
+注意 `/tree/` 是独立 `<head>`，不经过 `Layout.astro`：favicon / apple-touch-icon
+要在 `tree.astro` 里单独声明（2026-10 修复过，缺了会退回浏览器默认图标并请求
+不存在的 `/favicon.ico`）。新增独立 head 的页面同理。
 
 ## 7. 已知待办
 
