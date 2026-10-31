@@ -2180,12 +2180,20 @@
       function groundY(x: number, z: number) {
         return groundBaseY(x, z) + terrainDrop(state.region.id, x, z);
       }
+      // 水面高度：湖/海/冰面共用（放在 inWater 之前，判定"是否在水下"要用到）
+      const WATER_Y = -0.55;
       // 水体覆盖判定：水里不能长树长草，否则树冠会直接从水面上冒出来
       function inWater(x: number, z: number, id: string = state.region.id): boolean {
         const r = Math.hypot(x, z);
         if (id === 'sanya') return r > 16.5;
         if (id === 'tromso') return r > 88;
-        if (id === 'hangzhou') return Math.hypot(x / 260, (z + 220) / 190) < 1.02;
+        if (id === 'hangzhou') {
+          const e = Math.hypot(x / 260, (z + 220) / 190);
+          // 西湖水面画到 e<1.12（见 paintWater），但湖盆边缘的地面起伏让"地面已在水下、
+          // 水面却没铺到"的浅滩露成干草地——之前亭子拉到近岸就正好落在这种地方，
+          // 看着像被搬上了岸。这里把这片浅滩也判成水，草和树才不会穿过水面。
+          return e < 1.02 || (e < 1.12 && groundY(x, z) < WATER_Y);
+        }
         if (id === 'harbin') return Math.abs(z + 96) < 52;
         return false;
       }
@@ -2295,7 +2303,6 @@
       // ══════════════════ 水体：海 / 湖 / 冰面 / 峡湾 ══════════════════
       // 必须用 Standard 而不是 Basic：低 roughness 的波面会把太阳/月亮打成一条条反光，
       // 水色、反光和雾都会随一天中的光照与天气自动变化
-      const WATER_Y = -0.55;
       const waterNormal = (() => {
         const S = 256;
         const c = document.createElement('canvas');
@@ -2413,7 +2420,9 @@
         water.geometry.dispose();
         let geo: THREE.BufferGeometry;
         if (kind === 'lake') {
-          geo = new THREE.CircleGeometry(260, 96).rotateX(-Math.PI / 2);
+          // 椭圆半轴 260×0.73≈190；水面铺到 e<1.12，比湖盆（e<1）外扩一圈，
+          // 让湖盆边缘"地面已经在水下"的浅滩也被水盖住，岸线交给地形决定
+          geo = new THREE.CircleGeometry(292, 96).rotateX(-Math.PI / 2);
           geo.scale(1, 1, 0.73);
           geo.translate(0, 0, -220);
         } else if (kind === 'ice') {
@@ -4394,53 +4403,62 @@
         // 让台面正好落在原来那块 9.6×0.36 方台的上沿。
         const woodMat = new THREE.MeshLambertMaterial({ color: 0x8a6a4c });
         const deckY = WATER_Y + 0.55;
-        // 栈桥必须真的搭上岸：湖水是 sstep 渐深的，水面附近地面才浮出水面。
-        // 岸线位置跟着地形渐变走，写死坐标容易脱节，所以按地面高度搜索：
-        // 沿"背离湖心"方向前进，取第一个地面高出水面 0.28m 的点，再压进草坡 1.2m。
+        // 栈桥的岸线端要正好落在水线上（用户指的那条红线）：之前是按"地面高出水面 0.28m"
+        // 找岸、再往草坡压 1.2m，等于把桥往岸上多铺了近 9m，看着像一条跨过草地的长堤。
+        // 现在取第一个地面已经接近水面的点，只往草坡压 0.6m 让最后一根立柱踏在实地上。
         const shoreDir: [number, number] = [13, 11];
         const dirLen = Math.hypot(shoreDir[0], shoreDir[1]);
         const ux = shoreDir[0] / dirLen, uz = shoreDir[1] / dirLen;
         let sx = -45, sz = -34;
         for (let d = 0; d <= 60; d += 0.5) {
           const x = -45 + ux * d, z = -34 + uz * d;
-          if (groundY(x, z) > WATER_Y + 0.28) {
-            sx = x + ux * 1.2; sz = z + uz * 1.2;
+          if (groundY(x, z) > WATER_Y + 0.05) {
+            sx = x + ux * 0.6; sz = z + uz * 0.6;
             break;
           }
         }
-        // 桥总长压在 23m 左右：之前从岸上一路折到 75m 外的亭子，水上整整 88m，
-        // 远看就是一条望不到头的长堤（用户两次反馈"太长"）。
-        // 现在让亭子贴着岸边——进湖只有 22m；最后一跨 9m 沿亭子正面
-        // 方向 (0.912, 0.410) 走，模型开间（54°）正好正对桥头。
-        const P: [number, number] = [sx - ux * 22, sz - uz * 22];
-        const B: [number, number] = [P[0] + 0.912 * 9, P[1] + 0.410 * 9];
-        // 中间按九曲桥的走法往右折一下，别又是一块直板
+        // 桥面比岸坡高 0.55m，若桥头直接切在水线上，就会在岸边悬空一截（用户截图里的"断层"）。
+        // 所以让靠岸这一跨从草坡里斜着升起来：桥头端压到地面以下 0.3m（埋进坡里），
+        // 到折弯处已经是正常桥面高度，水流下面照常是架空的栈桥。
+        // 亭子就立在近岸的水面上，栈桥只做一小段从陆地过去的引桥：
+        // 水面现在铺到 e<1.12（见 paintWater），离岸 20m 已经是开阔水面，
+        // 不必再把桥拉成 70 多米、一路折弯的长堤。
+        const P: [number, number] = [sx - ux * 20, sz - uz * 20];
+        const B: [number, number] = [P[0] + 0.914 * 8, P[1] + 0.411 * 8];
+        // 中间留一处很缓的折弯，避免整条桥是一块直板
         const mx = (sx + B[0]) / 2, mz = (sz + B[1]) / 2;
         const lx = B[0] - sx, lz = B[1] - sz;
         const ll = Math.hypot(lx, lz);
         const A: [number, number] = [mx - (lz / ll) * 1.2, mz + (lx / ll) * 1.2];
-        const pts: [number, number][] = [[sx, sz], A, B, P];
+        const tipY = groundY(sx, sz) - 0.3;
+        const pts: [number, number, number][] = [
+          [sx, tipY, sz], [A[0], deckY, A[1]], [B[0], deckY, B[1]], [P[0], deckY, P[1]],
+        ];
         for (let i = 0; i < pts.length - 1; i++) {
-          const [x0, z0] = pts[i], [x1, z1] = pts[i + 1];
-          const len = Math.hypot(x1 - x0, z1 - z0);
+          const [x0, y0, z0] = pts[i], [x1, y1, z1] = pts[i + 1];
+          const flat = Math.hypot(x1 - x0, z1 - z0);
+          const len = Math.hypot(flat, y1 - y0);
           const ang = Math.atan2(x1 - x0, z1 - z0);
+          // 先绕 Y 摆方向、再绕自身 X 抬坡度（YXZ 顺序）。不能直接用 setFromUnitVectors
+          // 把 +Z 对到三维方向上——那样会把板子的宽度方向一起拧歪，桥面看着像翻了一块。
+          const pitch = Math.atan2(y1 - y0, flat);
           const deck = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.22, len + 0.7), woodMat);
-          deck.position.set((x0 + x1) / 2, deckY, (z0 + z1) / 2);
-          deck.rotation.y = ang;
+          deck.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
+          deck.rotation.set(pitch, ang, 0, 'YXZ');
           g.add(deck);
           for (const side of [-1, 1]) {
             const ox = Math.cos(ang) * side * 1.22;
             const oz = -Math.sin(ang) * side * 1.22;
             const rail = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.09, len + 0.7), woodMat);
-            rail.position.set((x0 + x1) / 2 + ox, deckY + 1.05, (z0 + z1) / 2 + oz);
-            rail.rotation.y = ang;
+            rail.position.set((x0 + x1) / 2 + ox, (y0 + y1) / 2 + 1.05, (z0 + z1) / 2 + oz);
+            rail.rotation.set(pitch, ang, 0, 'YXZ');
             g.add(rail);
             const posts = Math.max(2, Math.round(len / 2.6));
             for (let k = 0; k <= posts; k++) {
               const t = k / posts;
               const post = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.15, 0.12), woodMat);
               post.position.set(
-                x0 + (x1 - x0) * t + ox, deckY + 0.55, z0 + (z1 - z0) * t + oz,
+                x0 + (x1 - x0) * t + ox, y0 + (y1 - y0) * t + 0.55, z0 + (z1 - z0) * t + oz,
               );
               g.add(post);
             }
@@ -4448,7 +4466,7 @@
         }
         const pav = new THREE.Group();
         pav.position.set(P[0], deckY - 0.27, P[1]);
-        // 模型开间朝 three.js 的 -30°，转到桥头方向 (0.912, 0.410) 那边，台阶正对最后一段桥
+        // 模型开间朝 three.js 的 -30°，转到桥头方向 (0.914, 0.411) 那边，台阶正对最后一段桥
         pav.rotation.y = THREE.MathUtils.degToRad(54);
         g.add(pav);
         loadGLB('/models/hex_pavilion.glb')
