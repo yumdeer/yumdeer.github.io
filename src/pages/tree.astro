@@ -5106,14 +5106,17 @@
           // 素材里 bark 是 2K 树皮三图；两组叶片卡各用一套「枝条图集 + 透明度遮罩」
           // （aiStandardSurface3 = 2 枝图集，aiStandardSurface4 = 5 枝图集，
           //   必须和图集分区一一对应，错配会裁到半截枝条）
+          // 贴图统一用 WebP：原始那套是质量 100 的 JPEG（单张 4.3MB）+ 2048² PNG，
+          // 7 张共 13.6MB，杭州又是默认地区，首屏就要全下完才长得出树。
+          // 同一批图转 WebP 后 3.4MB，画面对比几乎无差。
           const [bark, barkN, barkR, leafA1, leafO1, leafA5, leafO5] = await Promise.all([
-            loadTex('/textures/willow/tgrpbdxu_2K_Albedo.jpg'),
-            loadTex('/textures/willow/tgrpbdxu_2K_Normal.jpg', false),
-            loadTex('/textures/willow/tgrpbdxu_2K_Roughness.jpg', false),
-            loadTex('/textures/willow/willow_leaves_01_A.png'),
-            loadTex('/textures/willow/willow_leaves_01_O.png', false),
-            loadTex('/textures/willow/willow_leaves.png'),
-            loadTex('/textures/willow/willow_leaves_transparancy.png', false),
+            loadTex('/textures/willow/tgrpbdxu_2K_Albedo.webp'),
+            loadTex('/textures/willow/tgrpbdxu_2K_Normal.webp', false),
+            loadTex('/textures/willow/tgrpbdxu_2K_Roughness.webp', false),
+            loadTex('/textures/willow/willow_leaves_01_A.webp'),
+            loadTex('/textures/willow/willow_leaves_01_O.webp', false),
+            loadTex('/textures/willow/willow_leaves.webp'),
+            loadTex('/textures/willow/willow_leaves_transparancy.webp', false),
           ]);
           // 树干的 UV 纵向铺了 3.5 次，贴图必须 repeat，否则会被拉成一整张
           bark.wrapS = bark.wrapT = THREE.RepeatWrapping;
