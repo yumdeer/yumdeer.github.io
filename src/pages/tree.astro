@@ -56,6 +56,27 @@
         text-shadow: 0 1px 4px rgba(0,0,0,0.5); pointer-events: none;
       }
 
+      /* 返回主页入口：3D 页是独立 head，没有 Layout 的站点导航，
+         这里补一个左上角胶囊，避免用户只能手动删 URL 后缀 */
+      .back {
+        position: fixed; left: 14px; top: 14px; z-index: 12;
+        display: inline-flex; align-items: center; gap: 5px;
+        padding: 6px 12px; border-radius: 999px;
+        background: rgba(255, 255, 255, 0.26);
+        backdrop-filter: blur(10px) saturate(1.1);
+        -webkit-backdrop-filter: blur(10px) saturate(1.1);
+        border: 1px solid rgba(255, 255, 255, 0.5);
+        color: #fff;
+        font-size: 12px; letter-spacing: 1px;
+        text-shadow: 0 1px 4px rgba(0, 0, 0, 0.55), 0 0 2px rgba(0, 0, 0, 0.4);
+        text-decoration: none;
+        transition: background 0.15s, border-color 0.15s, color 0.15s;
+      }
+      .back:hover {
+        background: rgba(255, 255, 255, 0.42);
+        border-color: rgba(255, 255, 255, 0.72);
+        color: #fff;
+      }
       /* ── 控制面板（右下悬浮，与站点极简风格一致）── */
       .tp {
         position: fixed; right: 16px; bottom: 16px; z-index: 10;
@@ -132,6 +153,7 @@
   </head>
   <body>
     <div class="stage"><canvas id="cv"></canvas></div>
+    <a class="back" href="/" aria-label="返回主页"><span aria-hidden="true">←</span> 主页</a>
     <div class="hint">拖动旋转 · 滚轮缩放</div>
 
     <aside class="tp" id="tp">
