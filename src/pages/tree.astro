@@ -4761,7 +4761,8 @@
 
       // glTF 没有单独的 alphaMap：把 albedo 的 RGB 与 opacity 遮罩的亮度
       // 合成一张 RGBA 图，alphaTest 才抠得出针叶之间的缝。
-      // winterBare 时顺带把偏绿的针叶像素整片抠掉——水杉冬天落叶，只剩褐色枝干
+      // winterBare 时对偏绿的针叶做成片抽稀：冬天落叶是"叶子更少"，
+      // 不是整树秃成光杆（整片抠掉会让水杉冬天只剩几根枝干）
       function cutoutTexture(
         albedo: THREE.Texture, opacity: THREE.Texture, winterBare: boolean,
       ): THREE.CanvasTexture {
@@ -4783,8 +4784,14 @@
           let alpha = op[i]; // 遮罩是灰度的：亮度即不透明度
           if (winterBare) {
             const r = d[i], gg = d[i + 1], b = d[i + 2];
-            // 叶片是绿/黄绿色：绿通道明显占优就当叶子抠掉
-            if (gg > r * 1.08 && gg > b * 1.08) alpha = 0;
+            // 叶片是绿/黄绿色：绿通道明显占优的针叶按 10px 方块抽稀，
+            // 保留约六成，读起来是"冬天叶子少一些"，而不是只剩枝干
+            if (gg > r * 1.08 && gg > b * 1.08) {
+              const p = i / 4;
+              const bx = Math.floor((p % W) / 10);
+              const by = Math.floor((p / W) / 10);
+              if (((bx * 7 + by * 11) % 5) >= 3) alpha = 0;
+            }
           }
           d[i + 3] = alpha;
         }
@@ -4846,9 +4853,11 @@
         // u 沿叶长（x）：叶基暗、叶尖稍亮。这里只做很淡的纵向渐变，
         // 之前画的斜向侧脉在近景会变成一层"斜纹布"，是叶片显假的主要原因
         const grd = g.createLinearGradient(0, 0, W, 0);
-        grd.addColorStop(0, '#1d5413');
-        grd.addColorStop(0.6, '#2b731d');
-        grd.addColorStop(1, '#3f8a24');
+        // 直接对齐水杉春季的叶绿（偏黄的橄榄绿，不是高饱和翠绿）：
+        // 这样三亚椰林和山东水杉在同一套色彩体系里，不会一棵鲜绿一棵灰绿
+        grd.addColorStop(0, '#5f6a38');
+        grd.addColorStop(0.6, '#6b7440');
+        grd.addColorStop(1, '#7d8648');
         g.fillStyle = grd;
         g.fillRect(0, 0, W, H);
         // 中脉只留一条极淡的亮痕，代替原来密集的侧脉线
@@ -4911,7 +4920,7 @@
         // 每片羽叶先算一条会下垂的叶轴，再沿叶轴长出 20 多对细长小叶，
         // 小叶本身还会末端下坠。剪影、透光、投影全部由几何决定
         // 小叶对数：Cocos nucifera 每片羽叶 50 对以上，这里按渲染成本取 39 对
-        // 小叶间距固定 6.5cm（下面按叶长换算对数），各片羽叶密度才一致
+        // 小叶间距固定 5cm（下面按叶长换算对数），各片羽叶密度才一致
         const rnd = mulberry32(9127);
         const leafGeos: THREE.BufferGeometry[] = [];
         // 造一片羽叶并塞进 out。dead=true 时小叶逐段变浅成枯褐色，走独立材质
@@ -4925,7 +4934,7 @@
           const bz = dz * 0.12;
           const by = H + 0.05 - 0.18 * u;
           // 小叶对数按叶长换算，保证长短不一的羽叶每米叶轴上的对数一致
-          const AX = Math.max(20, Math.round(len / 0.065));
+          const AX = Math.max(20, Math.round(len / 0.05));
 
           // 叶轴：仰角从 e0 一路减到负值，按角度逐步积分
           const px: number[] = [0], py: number[] = [0], pang: number[] = [e0];
@@ -5004,9 +5013,11 @@
                 const cyp = ryp + ddy * lf * tl - droop;
                 const czp = rzp + ddz * lf * tl;
                 // 青叶只叠灰度，颜色交给贴图；枯叶逐段由深褐褪到浅黄褐
-                const cr = dead ? (0.11 + 0.1 * tl) * shade : shade;
+                // 青叶按羽叶年龄做逐片差色：内圈新叶深绿，外圈老叶偏黄
+                const warm = 0.94 + 0.16 * u;
+                const cr = dead ? (0.11 + 0.1 * tl) * shade : shade * warm;
                 const cg = dead ? (0.085 + 0.075 * tl) * shade : shade;
-                const cb = dead ? (0.04 + 0.045 * tl) * shade : shade;
+                const cb = dead ? (0.04 + 0.045 * tl) * shade : shade * (0.9 - 0.04 * u);
                 for (const e of [-1, 1]) {
                   lpos.push(cxp + nx * w * e, cyp + ny * w * e, czp + nz * w * e);
                   luv.push(tl, e > 0 ? 1 : 0);
@@ -5028,8 +5039,8 @@
           }
         };
 
-        // 青叶：内圈近直立、外圈下垂，共 22 片
-        const N = 22;
+        // 青叶：内圈近直立、外圈下垂，共 30 片（2026-10 用户要求叶冠更密，原 22 片偏稀）
+        const N = 30;
         for (let i = 0; i < N; i++) {
           const u = i / (N - 1);
           makeFrond(
@@ -5125,17 +5136,73 @@
           const base = cutoutTexture(albedo, opacity, false);
           const bare = cutoutTexture(albedo, opacity, true);
           // 春/夏/秋共用同一张 RGBA 底图（叶色由 tintedTexture 按季节烘），
-          // 冬季那张才需要额外抠掉针叶
+          // 冬季那张做过针叶抽稀
           for (const season of Object.keys(SEASONS) as SeasonKey[]) {
             metaseqMaps.set(season, season === 'winter' ? bare : base);
+          }
+          // 「干 + 叶」共用一个网格、一个材质：整棵树一起调色会让树干
+          // 跟着叶子的季节变色。按顶点色拆成两块网格：
+          // 针叶 (1,0,0) 走季节调色，树皮 (1,1,1) 始终保持自己的褐色
+          const metaMeshes: THREE.Mesh[] = [];
+          root.traverse((o) => {
+            if ((o as THREE.Mesh).isMesh) metaMeshes.push(o as THREE.Mesh);
+          });
+          for (const mesh of metaMeshes) {
+            const colAttr = mesh.geometry.getAttribute('color') as THREE.BufferAttribute | null;
+            if (!colAttr) continue;
+            const geo = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry.clone();
+            const P = geo.getAttribute('position');
+            const N = geo.getAttribute('normal');
+            const U = geo.getAttribute('uv');
+            const C = geo.getAttribute('color');
+            const leaf = { pos: [] as number[], nor: [] as number[], uv: [] as number[], col: [] as number[] };
+            const bark = { pos: [] as number[], nor: [] as number[], uv: [] as number[], col: [] as number[] };
+            for (let i = 0; i < P.count; i += 3) {
+              const dst = C.getY(i) < 0.5 ? leaf : bark;
+              for (let j = 0; j < 3; j++) {
+                const k = i + j;
+                dst.pos.push(P.getX(k), P.getY(k), P.getZ(k));
+                if (N) dst.nor.push(N.getX(k), N.getY(k), N.getZ(k));
+                if (U) dst.uv.push(U.getX(k), U.getY(k));
+                // 拆完以后统一用白色顶点色，叶色交给贴图 + 季节滤镜
+                dst.col.push(1, 1, 1);
+              }
+            }
+            const parent = mesh.parent!;
+            const baseMat = mesh.material as THREE.MeshStandardMaterial;
+            // GLB 的网格节点自带矩阵（FBX 转来的 -90° 轴变换）：拆出来的
+            // 新网格如果只继承几何、不继承这个矩阵，整棵树就会躺倒/错位
+            mesh.updateMatrix();
+            const pieces: [string, typeof leaf][] = [['meta_foliage', leaf], ['meta_bark', bark]];
+            for (const [name, part] of pieces) {
+              if (!part.pos.length) continue;
+              const g = new THREE.BufferGeometry();
+              g.setAttribute('position', new THREE.Float32BufferAttribute(part.pos, 3));
+              if (part.nor.length) g.setAttribute('normal', new THREE.Float32BufferAttribute(part.nor, 3));
+              if (part.uv.length) g.setAttribute('uv', new THREE.Float32BufferAttribute(part.uv, 2));
+              g.setAttribute('color', new THREE.Float32BufferAttribute(part.col, 3));
+              g.computeBoundingSphere();
+              const m = baseMat.clone();
+              m.name = name;
+              if (name === 'meta_bark') m.map = base;
+              const nm = new THREE.Mesh(g, m);
+              nm.applyMatrix4(mesh.matrix);
+              nm.castShadow = true;
+              nm.receiveShadow = name === 'meta_bark';
+              parent.add(nm);
+            }
+            parent.remove(mesh);
+            mesh.geometry.dispose();
           }
           root.traverse((o) => {
             const mesh = o as THREE.Mesh;
             if (!mesh.isMesh) return;
             const m = mesh.material as THREE.MeshStandardMaterial;
-            m.alphaTest = 0.35;
+            const isBark = /bark/i.test(m.name || '');
+            // 树皮不需要 alphaTest，否则树皮贴图里的暗部会被抠出洞
+            m.alphaTest = isBark ? 0 : 0.35;
             m.side = THREE.DoubleSide;
-            m.roughness = 0.9;
+            m.roughness = isBark ? 0.95 : 0.9;
             m.metalness = 0;
             m.color.setHex(0xffffff);
             m.needsUpdate = true;
@@ -5366,20 +5433,24 @@
           autumn: 'grayscale(1) sepia(1) saturate(2.6) hue-rotate(-16deg) brightness(0.9)',
           winter: 'saturate(0.12) brightness(1.35)',
         },
-        // 椰树：热带常绿，四季几乎没有变化，只做很轻的明暗/冷暖差异。
-        // 原图是偏橄榄黄的扇叶（像枯了一半），往绿走 + 提饱和才有椰林那种油亮感
+        // 椰树：热带常绿，四季几乎没有变化，只做很轻的明暗差异。
+        // 之前 +20° 以上的 hue-rotate 会把叶色转到青绿/蓝绿，和场景里
+        // 其他树的标准叶绿不是一路；贴图本身已是中间调绿，这里不再转色相
         palm: {
-          spring: 'hue-rotate(22deg) saturate(1.24) brightness(1.14)',
-          summer: 'hue-rotate(24deg) saturate(1.26) brightness(1.16)',
-          autumn: 'hue-rotate(19deg) saturate(1.2) brightness(1.1)',
-          winter: 'hue-rotate(17deg) saturate(1.14) brightness(1.08)',
+          spring: 'saturate(1.08) brightness(1.12)',
+          summer: 'saturate(1.1) brightness(1.14)',
+          autumn: 'saturate(1.04) brightness(1.1)',
+          winter: 'saturate(1.0) brightness(1.06)',
         },
-        // 水杉：春嫩绿、夏深绿、深秋整树锈红（水杉最标志性的颜色）、冬季只剩枝干
+        // 水杉：春嫩绿、夏深绿、深秋整树锈红（水杉最标志性的颜色）、
+        // 冬季叶子变少且转成深褐色（不是发白的灰枝）
         metasequoia: {
           spring: 'hue-rotate(-6deg) saturate(1.0) brightness(1.14)',
           summer: 'hue-rotate(-2deg) saturate(1.06) brightness(0.98)',
           autumn: 'grayscale(1) sepia(1) saturate(3.0) hue-rotate(-26deg) brightness(0.92)',
-          winter: 'grayscale(1) brightness(2.4)',
+          // 冬季不是整片均匀深褐：保留一部分秋叶的红/绿差异，
+          // 只做低饱和 + 压暗，读起来是"叶子褪成深浅不一的褐"
+          winter: 'sepia(0.5) saturate(0.7) hue-rotate(-10deg) brightness(0.6)',
         },
         // 垂柳：新柳是浅黄绿（不能调成墨绿），秋季转淡黄，冬季落叶（整组叶片隐藏）
         willow: {
@@ -5621,15 +5692,18 @@
           const mesh = o as THREE.Mesh;
           if (!mesh.isMesh) return;
           const orig = mesh.material as THREE.MeshStandardMaterial;
-          // 水杉是「干 + 叶」共用一个材质、一张图集的单网格：整棵树当叶片处理，
-          // 按季节换成对应的合成图（冬季那张已经抠掉了针叶）
-          if (key === 'metasequoia') orig.map = metaseqMaps.get(state.season) ?? null;
+          // 水杉已在加载时拆成「针叶 / 树皮」两块：只有针叶按季节换图，
+          // 树皮始终保留自己的褐色，不跟着季节变
+          const isMetaLeaf = key === 'metasequoia' && /foliage/i.test(orig.name || '');
+          if (isMetaLeaf) orig.map = metaseqMaps.get(state.season) ?? null;
           // 阔叶模型是 leaves，冷杉是 twig（Poly Haven 命名不统一，单复数都要覆盖）；
           // 柳树模型是「bark + aiStandardSurface3/4」，除 bark 外都是叶片
-          const isLeaf = key === 'willow'
-            ? !/bark/i.test(orig.name || '')
-            : /leaves|leaf|twigs?/i.test(orig.name || '');
-          if (key === 'metasequoia' || isLeaf) {
+          const isLeaf = key === 'metasequoia'
+            ? isMetaLeaf
+            : key === 'willow'
+              ? !/bark/i.test(orig.name || '')
+              : /leaves|leaf|twigs?/i.test(orig.name || '');
+          if (isMetaLeaf || isLeaf) {
             const fm = foliageMaterial(orig, key, state.season);
             mesh.material = fm;
             mesh.userData.foliage = true;
