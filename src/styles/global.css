@@ -195,7 +195,8 @@ img {
    彩色 emoji，一黑一黄不统一；🌲 同理会被渲染成彩色 emoji）；
    .is-dark 切换 sun/moon 显示 */
 .theme-toggle,
-.scene-link {
+.scene-link,
+.tools-link {
   border: 0;
   padding: 0;
   background: none;
@@ -208,13 +209,15 @@ img {
 }
 
 .theme-toggle:hover,
-.scene-link:hover {
+.scene-link:hover,
+.tools-link:hover {
   color: #111;
   transform: scale(1.15);
 }
 
 .theme-toggle svg,
-.scene-link svg {
+.scene-link svg,
+.tools-link svg {
   display: block;
 }
 
@@ -456,12 +459,14 @@ img {
 }
 
 .theme-dark .theme-toggle,
-.theme-dark .scene-link {
+.theme-dark .scene-link,
+.theme-dark .tools-link {
   color: #6b6b74;
 }
 
 .theme-dark .theme-toggle:hover,
-.theme-dark .scene-link:hover {
+.theme-dark .scene-link:hover,
+.theme-dark .tools-link:hover {
   color: #ffffff;
 }
 
