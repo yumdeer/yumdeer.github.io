@@ -75,7 +75,7 @@ const collections: [string, string][] = [
         <button type="button" class="editor-tool-btn" id="btn-insert-image">插入图片</button>
         <button type="button" class="editor-tool-btn" id="btn-insert-music">插入音乐</button>
         <span class="editor-toolbar-hint">支持拖拽 / 粘贴图片直接上传</span>
-        <input type="file" id="file-images" accept="image/*" multiple hidden />
+        <input type="file" id="file-images" accept="image/*,.tif,.tiff" multiple hidden />
         <input type="file" id="file-audio" accept="audio/mpeg,.mp3" hidden />
         <div class="music-popover" id="music-popover" hidden>
           <label>网易云歌曲 ID <input id="netease-id" inputmode="numeric" placeholder="如 521264673" /></label>
@@ -97,6 +97,7 @@ const collections: [string, string][] = [
 </AdminLayout>
 
 <script>
+  import { decodeImage } from "../../lib/decode-image";
   const editor = document.getElementById('editor') as HTMLFormElement;
   const msg = editor.querySelector('[data-msg]')!;
   const previewLink = editor.querySelector('#preview-link') as HTMLAnchorElement;
@@ -165,7 +166,7 @@ const collections: [string, string][] = [
 
   // ── 图片上传：canvas 压缩 webp → R2 → Markdown（与照片管理同压缩策略） ──
   async function uploadImage(file: File): Promise<string | null> {
-    const bmp = await createImageBitmap(file).catch(() => null);
+    const bmp = await decodeImage(file).catch(() => null);
     if (!bmp) { flash('无法读取该图片'); return null; }
     const MAX = 1600;
     const scale = Math.min(1, MAX / Math.max(bmp.width, bmp.height));

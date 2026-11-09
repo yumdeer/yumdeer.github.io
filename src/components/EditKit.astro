@@ -21,7 +21,7 @@ const { email } = Astro.props;
   <button type="button" class="ek-btn ek-logout" data-ek-act="logout">登出</button>
 </div>
 
-<input type="file" id="ek-files" accept="image/*" multiple hidden />
+<input type="file" id="ek-files" accept="image/*,.tif,.tiff" multiple hidden />
 <div class="ek-modal" id="ek-modal" hidden>
   <div class="ek-card" role="dialog" aria-modal="true">
     <h3 id="ek-modal-title"></h3>
@@ -352,6 +352,7 @@ const { email } = Astro.props;
   // ── 前台编辑模式：统一接管 data-ek-* 标注的容器（SPA 需 page-load 重绑）──
   // 文章预览复用服务端同一渲染器（marked + 外链处理），预览即最终效果
   import { renderMarkdown } from '../lib/markdown';
+  import { decodeImage } from '../lib/decode-image';
 
   const $ = (sel: string) => document.querySelector(sel);
   const $$ = (sel: string) => [...document.querySelectorAll<HTMLElement>(sel)];
@@ -396,9 +397,9 @@ const { email } = Astro.props;
   const MAX_THUMB = 800;
   const MAX_FULL = 2400;
 
-  // File 与 URL 导入共用：createImageBitmap 只看字节，Blob 即可
+  // File 与 URL 导入共用：decodeImage 只看字节，Blob 即可（含 TIFF 兜底解码）
   async function processImage(blob: Blob, name: string) {
-    const bmp = await createImageBitmap(blob);
+    const bmp = await decodeImage(blob);
     const scaleSide = (max: number) => {
       const s = Math.min(1, max / Math.max(bmp.width, bmp.height));
       return [Math.round(bmp.width * s), Math.round(bmp.height * s)] as const;
@@ -490,7 +491,7 @@ const { email } = Astro.props;
   // ── 文章编辑（前台就地：左 Markdown / 右实时预览）────────────────────
   // 与后台编辑器同源的图片上传（1600px webp 压缩 → R2），成功后插入光标处
   async function uploadArticleImage(file: File, insert: (md: string) => void) {
-    const bmp = await createImageBitmap(file).catch(() => null);
+    const bmp = await decodeImage(file).catch(() => null);
     if (!bmp) return toast('无法读取该图片');
     const MAX = 1600;
     const scale = Math.min(1, MAX / Math.max(bmp.width, bmp.height));
@@ -517,7 +518,7 @@ const { email } = Astro.props;
       <div class="ek-editor-toolbar">
         <button type="button" class="ek-cancel ek-tool" id="ek-ar-img">＋ 插入图片</button>
         <span class="ek-tool-hint">支持拖拽 / 粘贴图片直接上传</span>
-        <input type="file" id="ek-ar-file" accept="image/*" multiple hidden />
+        <input type="file" id="ek-ar-file" accept="image/*,.tif,.tiff" multiple hidden />
       </div>
       <div class="ek-editor-grid">
         <textarea id="ek-ar-md" class="ek-editor-md" placeholder="Markdown 正文…" spellcheck="false"></textarea>

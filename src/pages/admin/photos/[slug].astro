@@ -23,7 +23,7 @@ if (!project) return Astro.redirect('/404');
 
   <form class="admin-form" id="upload-form">
     <label class="admin-file-label">
-      <input type="file" accept="image/*" multiple id="file-input" />
+      <input type="file" accept="image/*,.tif,.tiff" multiple id="file-input" />
       选择图片（可多选）— 浏览器自动压缩为 webp 后上传
     </label>
     <label>
@@ -61,13 +61,14 @@ if (!project) return Astro.redirect('/404');
 </AdminLayout>
 
 <script>
+  import { decodeImage } from "../../../lib/decode-image";
   // ── 浏览器端压缩：canvas 缩放 → webp（thumb 800px / full 2400px）+ 24px 模糊占位 ──
   const MAX_THUMB = 800;
   const MAX_FULL = 2400;
 
   // File 与 URL 导入共用：createImageBitmap 只看字节，Blob 即可
   async function processImage(blob: Blob, name: string) {
-    const bmp = await createImageBitmap(blob);
+    const bmp = await decodeImage(blob);
     const scaleSide = (max: number) => {
       const s = Math.min(1, max / Math.max(bmp.width, bmp.height));
       return [Math.round(bmp.width * s), Math.round(bmp.height * s)] as const;
