@@ -361,6 +361,8 @@
     pendingRender: false,
     showingOriginal: false,
     renderTimer: 0,
+    srcName: "",
+    srcExt: "",
   };
 
   var el = {
@@ -373,6 +375,7 @@
     btnCompare: document.getElementById("btn-compare"),
     btnReset: document.getElementById("btn-reset"),
     btnExport: document.getElementById("btn-export"),
+    exportFormat: document.getElementById("export-format"),
     btnAutoBase: document.getElementById("btn-auto-base"),
     btnManualBase: document.getElementById("btn-manual-base"),
     baseSwatch: document.getElementById("base-swatch"),
@@ -479,8 +482,32 @@
   }
 
   // ---- 载入图片 ----
+  var RAW_EXT_RE = /\.(dng|cr2|cr3|nef|arw|raf|orf|rw2|pef|srw|3fr|iiq|mos|erf|kdc|dcr|x3f)$/i;
+
+  function srcExtOf(name) {
+    var m = /\.([a-z0-9]+)$/i.exec(String(name || ""));
+    return m ? m[1].toLowerCase() : "";
+  }
+
+  function baseName(name) {
+    var str = String(name || "negative");
+    var i = str.lastIndexOf(".");
+    return i > 0 ? str.slice(0, i) : str;
+  }
+
   function loadFile(file) {
-    if (!file || !/^image\//.test(file.type) && !/\.(tif|tiff)$/i.test(file.name)) return;
+    if (!file) return;
+    // 浏览器无法解码相机 RAW，直接给出明确提示
+    if (RAW_EXT_RE.test(file.name)) {
+      setStatus("暂不支持 RAW（" + srcExtOf(file.name).toUpperCase() + "）：浏览器无法直接解码，请先转存为 TIFF / JPEG / PNG 后再试。");
+      return;
+    }
+    if (!/^image\//.test(file.type) && !/\.(tif|tiff|bmp|avif|webp|png|jpe?g)$/i.test(file.name)) {
+      setStatus("不支持的文件类型：" + (file.name || "未知"));
+      return;
+    }
+    state.srcName = file.name || "";
+    state.srcExt = srcExtOf(file.name);
     setStatus("正在解码图片…");
     decodeFile(file).then(function (bitmap) {
       state.bitmap = bitmap;
@@ -502,7 +529,11 @@
       el.canvas.height = h;
       el.dropZone.hidden = true;
       el.canvasWrap.hidden = false;
-      [el.btnCompare, el.btnReset, el.btnExport, el.btnAutoBase, el.btnManualBase].forEach(function (b) { b.disabled = false; });
+      [el.btnCompare, el.btnReset, el.btnExport, el.btnAutoBase, el.btnManualBase, el.exportFormat].forEach(function (b) { b.disabled = false; });
+      if (el.exportFormat) {
+        var origOpt = el.exportFormat.querySelector('option[value="original"]');
+        if (origOpt) origOpt.textContent = "原图格式（" + (state.srcExt ? state.srcExt.toUpperCase() : "未知") + "）";
+      }
       state.adj = defaultAdjustments();
       Object.keys(sliderEls).forEach(function (key) {
         var s = sliderEls[key];
@@ -582,9 +613,140 @@
 
   el.btnReset.addEventListener("click", resetAdjustments);
 
-  // ---- 导出：按原始分辨率渲染 ----
+  // ---- 导出：按原始分辨率渲染，可选 JPEG / PNG / WebP / TIFF / 原图格式 ----
+  var EXPORT_SPECS = {
+    jpeg: { mime: "image/jpeg", ext: "jpg", quality: 0.92, label: "JPEG" },
+    png: { mime: "image/png", ext: "png", quality: undefined, label: "PNG" },
+    webp: { mime: "image/webp", ext: "webp", quality: 0.92, label: "WebP" }
+  };
+
+  function resolveExportChoice(choice) {
+    if (choice !== "original") return { kind: choice, note: "" };
+    var ext = state.srcExt;
+    if (ext === "tif" || ext === "tiff") return { kind: "tiff", note: "" };
+    if (ext === "png") return { kind: "png", note: "" };
+    if (ext === "webp") return { kind: "webp", note: "" };
+    if (ext === "jpg" || ext === "jpeg") return { kind: "jpeg", note: "" };
+    return { kind: "png", note: ext ? "（原图 " + ext.toUpperCase() + " 无法在本机编码，已改导出 PNG）" : "" };
+  }
+
+  function canvasToBlob(cnv, mime, quality) {
+    return new Promise(function (resolve, reject) {
+      cnv.toBlob(function (blob) {
+        if (blob) resolve(blob);
+        else reject(new Error("浏览器不支持导出 " + mime));
+      }, mime, quality);
+    });
+  }
+
+  // 基线 TIFF 编码（RGB 8bit、多 strip），产出可被 Photoshop / Lightroom 等直接读取的标准 TIFF
+  function encodeTiffRgb(rgba, w, h) {
+    var rowsPerStrip = Math.max(1, Math.min(h, 128));
+    var strips = Math.ceil(h / rowsPerStrip);
+    var entries = 14;
+    var valuesStart = 8 + 2 + entries * 12 + 4;
+    var bpOff = valuesStart;
+    var soOff = bpOff + 6;
+    var sbOff = soOff + strips * 4;
+    var xrOff = sbOff + strips * 4;
+    var yrOff = xrOff + 8;
+    var software = "flowerdeer film-negative";
+    var swOff = yrOff + 8;
+    var swLen = software.length + 1;
+    var dataStart = swOff + swLen;
+    if (dataStart % 2) dataStart += 1;
+
+    var stripBytes = [];
+    for (var s = 0; s < strips; s++) {
+      var rows0 = Math.min(rowsPerStrip, h - s * rowsPerStrip);
+      stripBytes.push(rows0 * w * 3);
+    }
+
+    var head = new Uint8Array(dataStart);
+    var dv = new DataView(head.buffer);
+    head[0] = 0x49; head[1] = 0x49; head[2] = 0x2a; head[3] = 0x00; // II* 
+    dv.setUint32(4, 8, true);
+    dv.setUint16(8, entries, true);
+
+    var p = 10;
+    function entry(tag, type, count, value, useOffset) {
+      dv.setUint16(p, tag, true);
+      dv.setUint16(p + 2, type, true);
+      dv.setUint32(p + 4, count, true);
+      if (useOffset) dv.setUint32(p + 8, value, true);
+      else if (type === 3) dv.setUint16(p + 8, value, true);
+      else dv.setUint32(p + 8, value, true);
+      p += 12;
+    }
+
+    entry(256, 4, 1, w, false);                 // ImageWidth
+    entry(257, 4, 1, h, false);                 // ImageLength
+    entry(258, 3, 3, bpOff, true);              // BitsPerSample
+    entry(259, 3, 1, 1, false);                 // Compression = none
+    entry(262, 3, 1, 2, false);                 // Photometric = RGB
+    entry(273, 4, strips, soOff, true);         // StripOffsets
+    entry(277, 3, 1, 3, false);                 // SamplesPerPixel
+    entry(278, 4, 1, rowsPerStrip, false);      // RowsPerStrip
+    entry(279, 4, strips, sbOff, true);         // StripByteCounts
+    entry(282, 5, 1, xrOff, true);              // XResolution
+    entry(283, 5, 1, yrOff, true);              // YResolution
+    entry(284, 3, 1, 1, false);                 // PlanarConfiguration
+    entry(296, 3, 1, 2, false);                 // ResolutionUnit = inch
+    entry(305, 2, swLen, swOff, true);          // Software
+    dv.setUint32(p, 0, true);                   // 无下一个 IFD
+
+    dv.setUint16(bpOff, 8, true);
+    dv.setUint16(bpOff + 2, 8, true);
+    dv.setUint16(bpOff + 4, 8, true);
+    dv.setUint32(xrOff, 72, true); dv.setUint32(xrOff + 4, 1, true);
+    dv.setUint32(yrOff, 72, true); dv.setUint32(yrOff + 4, 1, true);
+    for (var k = 0; k < swLen; k++) {
+      head[swOff + k] = k < software.length ? software.charCodeAt(k) : 0;
+    }
+
+    var off = dataStart;
+    for (var t = 0; t < strips; t++) {
+      dv.setUint32(soOff + t * 4, off, true);
+      dv.setUint32(sbOff + t * 4, stripBytes[t], true);
+      off += stripBytes[t];
+    }
+
+    var parts = [head];
+    for (var st = 0; st < strips; st++) {
+      var y0 = st * rowsPerStrip;
+      var rows = Math.min(rowsPerStrip, h - y0);
+      var buf = new Uint8Array(rows * w * 3);
+      var o = 0;
+      for (var y = 0; y < rows; y++) {
+        var rowStart = (y0 + y) * w * 4;
+        for (var x = 0; x < w; x++) {
+          var si = rowStart + x * 4;
+          buf[o++] = rgba[si];
+          buf[o++] = rgba[si + 1];
+          buf[o++] = rgba[si + 2];
+        }
+      }
+      parts.push(buf);
+    }
+    return new Blob(parts, { type: "image/tiff" });
+  }
+
+  function saveBlob(blob, ext, label, note) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = baseName(state.srcName || "negative") + "-converted." + ext;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+    setStatus("已导出 " + label + "（" + state.fullW + " × " + state.fullH + "）" + (note || ""));
+    el.btnExport.disabled = false;
+  }
+
   el.btnExport.addEventListener("click", function () {
     if (!state.bitmap) return;
+    var resolved = resolveExportChoice(el.exportFormat ? el.exportFormat.value : "jpeg");
     el.btnExport.disabled = true;
     setStatus("正在按原始分辨率导出…");
     setTimeout(function () {
@@ -598,22 +760,22 @@
         var out = ctx.createImageData(w, h);
         render(src.data, out.data, state.base, state.adj, state.analysis);
         ctx.putImageData(out, 0, 0);
-        cnv.toBlob(function (blob) {
-          var url = URL.createObjectURL(blob);
-          var a = document.createElement("a");
-          var stem = "negative";
-          a.href = url;
-          a.download = stem + "-converted.jpg";
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
-          setStatus("已导出 JPEG（" + w + " × " + h + "）");
+
+        if (resolved.kind === "tiff") {
+          saveBlob(encodeTiffRgb(out.data, w, h), "tiff", "TIFF", resolved.note);
+          return;
+        }
+        var spec = EXPORT_SPECS[resolved.kind] || EXPORT_SPECS.png;
+        canvasToBlob(cnv, spec.mime, spec.quality).then(function (blob) {
+          saveBlob(blob, spec.ext, spec.label, resolved.note);
+        }).catch(function (err) {
+          console.error(err);
+          setStatus("导出失败：" + err.message);
           el.btnExport.disabled = false;
-        }, "image/jpeg", 0.92);
+        });
       } catch (err) {
         console.error(err);
-        setStatus("导出失败：" + err.message);
+        setStatus("导出失败：" + (err && err.message ? err.message : "未知错误"));
         el.btnExport.disabled = false;
       }
     }, 20);

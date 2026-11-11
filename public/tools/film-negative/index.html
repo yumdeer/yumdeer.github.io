@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="负片校正工具：自动识别片基色，在本地把扫描负片还原为正片，支持曝光、对比度、白平衡等调整。图片不上传服务器。">
   <title>负片校正 - flowerdeer 小工具</title>
-  <link rel="stylesheet" href="styles.css?v=1.0.1">
+  <link rel="stylesheet" href="styles.css?v=1.0.2">
 </head>
 <body>
   <header class="topbar">
@@ -27,9 +27,9 @@
               <path d="M10.4 13.6V9.8l3 1.9-3 1.9z" fill="currentColor" stroke="none"></path>
             </svg>
             <p class="drop-main">点击选择，或拖入负片扫描图</p>
-            <p class="drop-sub">支持 JPEG / PNG / WebP / TIFF，全部在本机处理</p>
+            <p class="drop-sub">支持 JPEG / PNG / WebP / TIFF / BMP，全部在本机处理</p>
           </div>
-          <input type="file" id="file-input" accept="image/jpeg,image/png,image/webp,image/tiff,.tif,.tiff" hidden>
+          <input type="file" id="file-input" accept="image/jpeg,image/png,image/webp,image/tiff,image/bmp,image/avif,image/*,.tif,.tiff" hidden>
         </div>
         <div id="canvas-wrap" class="canvas-wrap" hidden>
           <canvas id="canvas"></canvas>
@@ -41,7 +41,14 @@
         <span class="stage-actions">
           <button id="btn-compare" class="ghost-btn" disabled>按住查看原片</button>
           <button id="btn-reset" class="ghost-btn" disabled>重置参数</button>
-          <button id="btn-export" class="primary-btn" disabled>导出 JPEG</button>
+          <select id="export-format" class="format-select" aria-label="导出格式" disabled>
+            <option value="jpeg">JPEG</option>
+            <option value="png">PNG</option>
+            <option value="webp">WebP</option>
+            <option value="tiff">TIFF</option>
+            <option value="original">原图格式</option>
+          </select>
+          <button id="btn-export" class="primary-btn" disabled>导出</button>
         </span>
       </div>
     </section>
@@ -75,6 +82,6 @@
 
   <script src="lib/pako.min.js"></script>
   <script src="lib/UTIF.js"></script>
-  <script src="app.js?v=1.0.0"></script>
+  <script src="app.js?v=1.0.1"></script>
 </body>
 </html>
