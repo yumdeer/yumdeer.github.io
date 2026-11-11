@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="负片校正工具：自动识别片基色，在本地把扫描负片还原为正片，支持曝光、对比度、白平衡等调整。图片不上传服务器。">
+  <meta name="description" content="负片校正工具：自动识别片基色，在本地把扫描负片还原为正片，支持多图队列、滑块对比、参数导入导出与批量 ZIP 导出。图片不上传服务器。">
   <title>负片校正 - flowerdeer 小工具</title>
-  <link rel="stylesheet" href="styles.css?v=1.0.2">
+  <link rel="stylesheet" href="styles.css?v=1.0.3">
 </head>
 <body>
   <header class="topbar">
@@ -27,19 +27,27 @@
               <path d="M10.4 13.6V9.8l3 1.9-3 1.9z" fill="currentColor" stroke="none"></path>
             </svg>
             <p class="drop-main">点击选择，或拖入负片扫描图</p>
-            <p class="drop-sub">支持 JPEG / PNG / WebP / TIFF / BMP，全部在本机处理</p>
+            <p class="drop-sub">支持 JPEG / PNG / WebP / TIFF / BMP，可多选（最多 12 张），全部在本机处理</p>
           </div>
-          <input type="file" id="file-input" accept="image/jpeg,image/png,image/webp,image/tiff,image/bmp,image/avif,image/*,.tif,.tiff" hidden>
+          <input type="file" id="file-input" accept="image/jpeg,image/png,image/webp,image/tiff,image/bmp,image/avif,image/*,.tif,.tiff" multiple hidden>
         </div>
         <div id="canvas-wrap" class="canvas-wrap" hidden>
           <canvas id="canvas"></canvas>
           <div id="sample-badge" class="sample-badge" hidden>点击画面中未曝光的片基区域</div>
+          <div id="compare-overlay" class="compare-overlay" hidden>
+            <canvas id="compare-before"></canvas>
+            <span class="compare-tag">简单反转</span>
+            <span class="compare-tag compare-tag-after">片基校正</span>
+            <div id="compare-divider" class="compare-divider"><span class="compare-handle"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1c1b18" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5"></path></svg></span></div>
+          </div>
         </div>
       </div>
+      <div id="queue-bar" class="queue-bar" hidden></div>
       <div class="stage-bar">
         <span id="status" class="status">等待载入图片</span>
         <span class="stage-actions">
           <button id="btn-compare" class="ghost-btn" disabled>按住查看原片</button>
+          <button id="btn-compare-split" class="ghost-btn" disabled>对比模式</button>
           <button id="btn-reset" class="ghost-btn" disabled>重置参数</button>
           <select id="export-format" class="format-select" aria-label="导出格式" disabled>
             <option value="jpeg">JPEG</option>
@@ -48,6 +56,7 @@
             <option value="tiff">TIFF</option>
             <option value="original">原图格式</option>
           </select>
+          <button id="btn-export-zip" class="ghost-btn" disabled>导出全部 ZIP</button>
           <button id="btn-export" class="primary-btn" disabled>导出</button>
         </span>
       </div>
@@ -76,12 +85,30 @@
           <span class="card-note-inline" id="adj-note">双击滑块可复位</span>
         </div>
         <div id="sliders" class="sliders"></div>
+        <div class="card-actions params-actions">
+          <button id="btn-export-params" class="ghost-btn" disabled>导出参数</button>
+          <button id="btn-import-params" class="ghost-btn" disabled>导入参数</button>
+        </div>
+        <input type="file" id="params-input" accept=".json,application/json" hidden>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <h2>批量</h2>
+          <span class="card-note-inline">队列 <span id="queue-count">0</span>/12</span>
+        </div>
+        <div class="batch-grid">
+          <button id="btn-apply-adj-all" class="ghost-btn" disabled>调色到全部</button>
+          <button id="btn-apply-base-all" class="ghost-btn" disabled>片基到全部</button>
+          <button id="btn-reset-all" class="ghost-btn" disabled>重置全部</button>
+        </div>
+        <p class="card-note">同一卷胶片可用「片基到全部」同步片基色；「调色到全部」把 8 项调色参数复制到其余图片；「重置全部」只重置调色参数，不动片基。</p>
       </div>
     </aside>
   </main>
 
   <script src="lib/pako.min.js"></script>
   <script src="lib/UTIF.js"></script>
-  <script src="app.js?v=1.0.1"></script>
+  <script src="lib/jszip.min.js"></script>
+  <script src="app.js?v=1.0.2"></script>
 </body>
 </html>

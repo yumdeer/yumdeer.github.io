@@ -363,6 +363,10 @@
     renderTimer: 0,
     srcName: "",
     srcExt: "",
+    queue: [],           // 多图队列（上限见 MAX_QUEUE）
+    curId: null,         // 当前编辑中的队列项 id
+    splitOn: false,      // 滑块对比模式
+    splitX: 0.5,         // 对比分割线位置（0-1）
   };
 
   var el = {
@@ -383,6 +387,19 @@
     baseSource: document.getElementById("base-source"),
     baseMessage: document.getElementById("base-message"),
     sliders: document.getElementById("sliders"),
+    queueBar: document.getElementById("queue-bar"),
+    queueCount: document.getElementById("queue-count"),
+    btnCompareSplit: document.getElementById("btn-compare-split"),
+    btnExportZip: document.getElementById("btn-export-zip"),
+    btnApplyAdjAll: document.getElementById("btn-apply-adj-all"),
+    btnApplyBaseAll: document.getElementById("btn-apply-base-all"),
+    btnResetAll: document.getElementById("btn-reset-all"),
+    btnExportParams: document.getElementById("btn-export-params"),
+    btnImportParams: document.getElementById("btn-import-params"),
+    paramsInput: document.getElementById("params-input"),
+    compareOverlay: document.getElementById("compare-overlay"),
+    compareBefore: document.getElementById("compare-before"),
+    compareDivider: document.getElementById("compare-divider"),
   };
 
   var canvasCtx = el.canvas.getContext("2d");
@@ -401,7 +418,8 @@
     el.baseSwatch.style.background = "rgb(" + r + ", " + g + ", " + b + ")";
     el.baseRgb.textContent = "RGB " + r + ", " + g + ", " + b;
     el.baseSource.textContent = state.baseSource === "manual" ? "手动" :
-      state.baseSource === "auto" ? "自动" : "默认值";
+      state.baseSource === "auto" ? "自动" :
+      state.baseSource === "sync" ? "同步" : "默认值";
   }
 
   function updateBaseMessage(msg) {
@@ -429,12 +447,14 @@
       input.addEventListener("input", function () {
         state.adj[key] = Number(input.value);
         value.textContent = spec.fmt(state.adj[key]);
+        markEdited();
         scheduleRender();
       });
       input.addEventListener("dblclick", function () {
         state.adj[key] = spec.default;
         input.value = String(spec.default);
         value.textContent = spec.fmt(spec.default);
+        markEdited();
         scheduleRender();
       });
       row.appendChild(label);
@@ -481,7 +501,10 @@
     canvasCtx.putImageData(state.previewData, 0, 0);
   }
 
-  // ---- 载入图片 ----
+  // ---- 多图队列与载入 ----
+  var MAX_QUEUE = 12;
+  var uidSeed = 1;
+
   var RAW_EXT_RE = /\.(dng|cr2|cr3|nef|arw|raf|orf|rw2|pef|srw|3fr|iiq|mos|erf|kdc|dcr|x3f)$/i;
 
   function srcExtOf(name) {
@@ -495,25 +518,208 @@
     return i > 0 ? str.slice(0, i) : str;
   }
 
-  function loadFile(file) {
-    if (!file) return;
-    // 浏览器无法解码相机 RAW，直接给出明确提示
-    if (RAW_EXT_RE.test(file.name)) {
-      setStatus("暂不支持 RAW（" + srcExtOf(file.name).toUpperCase() + "）：浏览器无法直接解码，请先转存为 TIFF / JPEG / PNG 后再试。");
+  function copyAdj(a) {
+    var o = {};
+    for (var k in ADJUSTMENTS) o[k] = a && typeof a[k] === "number" ? a[k] : ADJUSTMENTS[k].default;
+    return o;
+  }
+
+  function adjIsDefault(a) {
+    for (var k in ADJUSTMENTS) if (a[k] !== ADJUSTMENTS[k].default) return false;
+    return true;
+  }
+
+  function queueIndexOf(id) {
+    for (var i = 0; i < state.queue.length; i++) if (state.queue[i].id === id) return i;
+    return -1;
+  }
+
+  function currentItem() {
+    var i = queueIndexOf(state.curId);
+    return i >= 0 ? state.queue[i] : null;
+  }
+
+  // 标记当前图是否已被编辑（调色非默认，或手动取样过片基）
+  function markEdited() {
+    var cur = currentItem();
+    if (!cur) return;
+    var v = !adjIsDefault(state.adj) || state.baseSource === "manual";
+    if (cur.edited !== v) {
+      cur.edited = v;
+      renderQueue();
+    }
+  }
+
+  // 把编辑器当前参数写回队列项（切图 / 批量导出前调用）
+  function saveCurrentToQueue() {
+    var cur = currentItem();
+    if (!cur || !state.previewData) return;
+    cur.adj = copyAdj(state.adj);
+    cur.base = state.base.slice();
+    cur.baseSource = state.baseSource;
+    cur.opened = true;
+    cur.edited = !adjIsDefault(state.adj) || state.baseSource === "manual";
+  }
+
+  function addFiles(fileList) {
+    var files = Array.prototype.slice.call(fileList || []);
+    if (!files.length) return;
+    var accepted = [];
+    var rawNames = [];
+    var badCount = 0;
+    files.forEach(function (f) {
+      if (RAW_EXT_RE.test(f.name)) { rawNames.push(f.name); return; }
+      if (!/^image\//.test(f.type) && !/\.(tif|tiff|bmp|avif|webp|png|jpe?g)$/i.test(f.name)) { badCount += 1; return; }
+      accepted.push(f);
+    });
+    var room = MAX_QUEUE - state.queue.length;
+    var overflow = Math.max(0, accepted.length - room);
+    if (overflow > 0) accepted = accepted.slice(0, room);
+    var firstAdded = null;
+    accepted.forEach(function (f) {
+      var item = {
+        id: uidSeed++,
+        file: f,
+        name: f.name || ("negative-" + uidSeed),
+        ext: srcExtOf(f.name),
+        thumbURL: null,
+        thumbFailed: false,
+        base: null,
+        baseSource: null,
+        adj: null,
+        opened: false,
+        edited: false,
+      };
+      state.queue.push(item);
+      if (!firstAdded) firstAdded = item;
+      queueThumb(item);
+    });
+    var msgs = [];
+    if (rawNames.length) {
+      msgs.push("RAW（" + rawNames.map(function (n) { return srcExtOf(n).toUpperCase(); }).join("、") + "）暂不支持：浏览器无法直接解码，请先转存 TIFF / JPEG");
+    }
+    if (badCount) msgs.push("已忽略 " + badCount + " 个不支持类型的文件");
+    if (overflow > 0) msgs.push("队列最多 " + MAX_QUEUE + " 张，超出的 " + overflow + " 张已忽略");
+    renderQueue();
+    if (msgs.length) setStatus(msgs.join("；"));
+    else if (accepted.length && state.curId) setStatus("已添加 " + accepted.length + " 张，队列 " + state.queue.length + "/" + MAX_QUEUE + "。");
+    if (!accepted.length) return;
+    if (!state.curId) {
+      state.curId = firstAdded.id;
+      loadItemIntoEditor(firstAdded);
+      renderQueue();
+    }
+  }
+
+  // 缩略图：后台串行生成，避免同时解码多张大图
+  var thumbChain = Promise.resolve();
+  function queueThumb(item) {
+    thumbChain = thumbChain.then(function () {
+      return genThumb(item);
+    }).catch(function () { /* 单张失败不影响后续 */ });
+  }
+
+  function genThumb(item) {
+    if (item.thumbURL) return Promise.resolve();
+    return decodeFile(item.file).then(function (bmp) {
+      var s = Math.min(1, 128 / Math.max(bmp.width, bmp.height));
+      var w = Math.max(1, Math.round(bmp.width * s));
+      var h = Math.max(1, Math.round(bmp.height * s));
+      var c = document.createElement("canvas");
+      c.width = w; c.height = h;
+      var cx = c.getContext("2d");
+      cx.imageSmoothingQuality = "high";
+      cx.drawImage(bmp, 0, 0, w, h);
+      if (bmp.close) bmp.close();
+      item.thumbURL = c.toDataURL("image/jpeg", 0.75);
+      renderQueue();
+    }).catch(function (err) {
+      console.error("缩略图生成失败：", err);
+      item.thumbFailed = true;
+      renderQueue();
+    });
+  }
+
+  function switchTo(id) {
+    if (state.curId === id || queueIndexOf(id) < 0) return;
+    saveCurrentToQueue();
+    state.curId = id;
+    setSampling(false);
+    state.showingOriginal = false;
+    loadItemIntoEditor(state.queue[queueIndexOf(id)]);
+    renderQueue();
+  }
+
+  function removeFromQueue(id) {
+    var i = queueIndexOf(id);
+    if (i < 0) return;
+    var wasCur = state.queue[i].id === state.curId;
+    state.queue.splice(i, 1);
+    if (!state.queue.length) {
+      state.curId = null;
+      resetToEmptyState();
       return;
     }
-    if (!/^image\//.test(file.type) && !/\.(tif|tiff|bmp|avif|webp|png|jpe?g)$/i.test(file.name)) {
-      setStatus("不支持的文件类型：" + (file.name || "未知"));
-      return;
+    if (wasCur) {
+      state.curId = null;
+      var nextId = state.queue[Math.min(i, state.queue.length - 1)].id;
+      switchTo(nextId);
+    } else {
+      renderQueue();
+      setStatus("已移除 1 张，队列剩余 " + state.queue.length + " 张。");
     }
-    state.srcName = file.name || "";
-    state.srcExt = srcExtOf(file.name);
-    setStatus("正在解码图片…");
-    decodeFile(file).then(function (bitmap) {
+  }
+
+  function resetToEmptyState() {
+    state.bitmap = null;
+    state.previewData = null;
+    state.previewW = 0;
+    state.previewH = 0;
+    state.fullW = 0;
+    state.fullH = 0;
+    state.analysis = null;
+    state.adj = defaultAdjustments();
+    state.base = DEFAULT_BASE.slice();
+    state.baseSource = "default";
+    state.showingOriginal = false;
+    state.splitOn = false;
+    state.srcName = "";
+    state.srcExt = "";
+    setSampling(false);
+    if (el.btnCompareSplit) {
+      el.btnCompareSplit.classList.remove("is-active");
+      el.btnCompareSplit.textContent = "对比模式";
+    }
+    if (el.compareOverlay) el.compareOverlay.hidden = true;
+    Object.keys(sliderEls).forEach(function (key) {
+      var s = sliderEls[key];
+      s.input.value = String(s.spec.default);
+      s.value.textContent = s.spec.fmt(s.spec.default);
+    });
+    el.canvasWrap.hidden = true;
+    el.dropZone.hidden = false;
+    [el.btnCompare, el.btnCompareSplit, el.btnReset, el.btnExport, el.btnAutoBase,
+     el.btnManualBase, el.btnExportParams, el.btnImportParams, el.btnApplyAdjAll,
+     el.btnApplyBaseAll, el.btnResetAll, el.btnExportZip].forEach(function (b) { if (b) b.disabled = true; });
+    if (el.exportFormat) el.exportFormat.disabled = true;
+    updateBaseUI();
+    updateBaseMessage("载入图片后自动识别画面边缘的未曝光片基。");
+    renderQueue();
+    setStatus("等待载入图片");
+  }
+
+  // 载入指定队列项到编辑器（解码全图 + 生成预览 + 恢复缓存参数）
+  function loadItemIntoEditor(item) {
+    if (!item) return;
+    setStatus("正在解码 " + item.name + "…");
+    decodeFile(item.file).then(function (bitmap) {
+      if (state.curId !== item.id) { // 等待期间用户已切到别的图
+        if (bitmap.close) bitmap.close();
+        return;
+      }
       state.bitmap = bitmap;
       state.fullW = bitmap.width;
       state.fullH = bitmap.height;
-      // 预览尺寸：限制最长边 1600px
       var scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
       var w = Math.max(1, Math.round(bitmap.width * scale));
       var h = Math.max(1, Math.round(bitmap.height * scale));
@@ -527,33 +733,124 @@
       state.previewH = h;
       el.canvas.width = w;
       el.canvas.height = h;
+      state.srcName = item.name;
+      state.srcExt = item.ext;
       el.dropZone.hidden = true;
       el.canvasWrap.hidden = false;
-      [el.btnCompare, el.btnReset, el.btnExport, el.btnAutoBase, el.btnManualBase, el.exportFormat].forEach(function (b) { b.disabled = false; });
+      [el.btnCompare, el.btnCompareSplit, el.btnReset, el.btnExport, el.btnAutoBase,
+       el.btnManualBase, el.btnExportParams, el.btnImportParams].forEach(function (b) { if (b) b.disabled = false; });
+      if (el.exportFormat) el.exportFormat.disabled = false;
       if (el.exportFormat) {
         var origOpt = el.exportFormat.querySelector('option[value="original"]');
-        if (origOpt) origOpt.textContent = "原图格式（" + (state.srcExt ? state.srcExt.toUpperCase() : "未知") + "）";
+        if (origOpt) origOpt.textContent = "原图格式（" + (item.ext ? item.ext.toUpperCase() : "未知") + "）";
       }
-      state.adj = defaultAdjustments();
+      // 恢复缓存的调色参数，否则用默认值
+      state.adj = item.adj ? copyAdj(item.adj) : defaultAdjustments();
       Object.keys(sliderEls).forEach(function (key) {
         var s = sliderEls[key];
-        s.input.value = String(s.spec.default);
-        s.value.textContent = s.spec.fmt(s.spec.default);
+        s.input.value = String(state.adj[key]);
+        s.value.textContent = s.spec.fmt(state.adj[key]);
       });
       setSampling(false);
-      // 自动识别片基并分析
-      var detected = autoDetectBase(state.previewData.data, w, h);
-      state.base = detected.rgb;
-      state.baseSource = detected.source;
+      state.showingOriginal = false;
+      // 片基：同步 / 手动设定的值直接沿用，否则自动识别
+      var detected;
+      if (item.base && item.baseSource) {
+        state.base = item.base.slice();
+        state.baseSource = item.baseSource;
+        detected = { message: item.baseSource === "sync" ? "已沿用同步到这一张的片基色。" : "已沿用这张图之前设定的片基色。" };
+      } else {
+        detected = autoDetectBase(state.previewData.data, w, h);
+        state.base = detected.rgb;
+        state.baseSource = detected.source;
+        item.base = state.base.slice();
+        item.baseSource = state.baseSource;
+      }
       state.analysis = analyze(state.previewData.data, state.base);
+      item.opened = true;
       updateBaseUI();
       updateBaseMessage(detected.message);
       doRender();
-      setStatus(file.name + " · " + bitmap.width + " × " + bitmap.height);
+      if (state.splitOn) rebuildCompareBefore();
+      renderQueue();
+      var pos = queueIndexOf(item.id);
+      setStatus(item.name + " · " + bitmap.width + " × " + bitmap.height +
+        (pos >= 0 ? " · 第 " + (pos + 1) + "/" + state.queue.length + " 张" : ""));
     }).catch(function (err) {
       console.error(err);
       setStatus("图片解码失败：" + (err && err.message ? err.message : "不支持的格式"));
     });
+  }
+
+  // 渲染队列条（缩略图卡片 + 状态角标 + 删除 + 添加）
+  function renderQueue() {
+    var bar = el.queueBar;
+    if (!bar) return;
+    var keepScroll = bar.scrollLeft;
+    bar.hidden = state.queue.length === 0;
+    bar.innerHTML = "";
+    state.queue.forEach(function (item, i) {
+      var card = document.createElement("div");
+      card.className = "qcard" + (item.id === state.curId ? " is-active" : "") + (item.opened ? "" : " is-unloaded");
+      card.title = item.name;
+      card.setAttribute("role", "button");
+      card.tabIndex = 0;
+      var thumb = document.createElement("div");
+      thumb.className = "qthumb" + (item.thumbURL ? "" : " is-pending");
+      if (item.thumbURL) thumb.style.backgroundImage = "url(" + item.thumbURL + ")";
+      card.appendChild(thumb);
+      var idx = document.createElement("span");
+      idx.className = "qindex";
+      idx.textContent = String(i + 1);
+      card.appendChild(idx);
+      var badge;
+      if (item.id === state.curId) badge = { text: "编辑中", cls: "is-active" };
+      else if (item.edited) badge = { text: "已编辑", cls: "is-edited" };
+      else if (!item.opened) badge = { text: "未加载", cls: "" };
+      if (badge) {
+        var b = document.createElement("span");
+        b.className = "qbadge " + badge.cls;
+        b.textContent = badge.text;
+        card.appendChild(b);
+      }
+      var del = document.createElement("button");
+      del.type = "button";
+      del.className = "qdel";
+      del.textContent = "×";
+      del.title = "移除";
+      del.setAttribute("aria-label", "移除 " + item.name);
+      del.addEventListener("click", function (e) {
+        e.stopPropagation();
+        removeFromQueue(item.id);
+      });
+      card.appendChild(del);
+      card.addEventListener("click", function () {
+        if (item.id !== state.curId) switchTo(item.id);
+      });
+      card.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          if (item.id !== state.curId) switchTo(item.id);
+        }
+      });
+      bar.appendChild(card);
+    });
+    if (state.queue.length < MAX_QUEUE) {
+      var add = document.createElement("button");
+      add.type = "button";
+      add.className = "qadd";
+      add.title = "添加更多图片（还可加 " + (MAX_QUEUE - state.queue.length) + " 张）";
+      add.textContent = "＋";
+      add.addEventListener("click", function () { el.fileInput.click(); });
+      bar.appendChild(add);
+    }
+    bar.scrollLeft = keepScroll;
+    if (el.queueCount) el.queueCount.textContent = String(state.queue.length);
+    var multi = state.queue.length >= 2;
+    if (el.btnExportZip) el.btnExportZip.disabled = !multi;
+    if (el.btnApplyAdjAll) el.btnApplyAdjAll.disabled = !multi || !state.previewData;
+    if (el.btnApplyBaseAll) el.btnApplyBaseAll.disabled = !multi || !state.previewData;
+    if (el.btnResetAll) el.btnResetAll.disabled = state.queue.length < 1 || !state.previewData;
   }
 
   // ---- 手动取样 ----
@@ -582,6 +879,7 @@
     updateBaseUI();
     updateBaseMessage(sampled.message);
     setSampling(false);
+    markEdited();
     scheduleRender();
   });
 
@@ -594,6 +892,7 @@
     updateBaseUI();
     updateBaseMessage(detected.message);
     setSampling(false);
+    markEdited();
     scheduleRender();
   });
 
@@ -601,8 +900,13 @@
   function showOriginal(on) {
     if (!state.previewData) return;
     state.showingOriginal = on;
-    if (on) drawOriginalPreview();
-    else doRender();
+    if (on) {
+      drawOriginalPreview();
+      if (el.compareOverlay) el.compareOverlay.hidden = true;
+    } else {
+      doRender();
+      if (el.compareOverlay) el.compareOverlay.hidden = !state.splitOn;
+    }
   }
   ["pointerdown"].forEach(function (ev) {
     el.btnCompare.addEventListener(ev, function (e) { e.preventDefault(); showOriginal(true); });
@@ -611,7 +915,10 @@
     el.btnCompare.addEventListener(ev, function () { showOriginal(false); });
   });
 
-  el.btnReset.addEventListener("click", resetAdjustments);
+  el.btnReset.addEventListener("click", function () {
+    resetAdjustments();
+    markEdited();
+  });
 
   // ---- 导出：按原始分辨率渲染，可选 JPEG / PNG / WebP / TIFF / 原图格式 ----
   var EXPORT_SPECS = {
@@ -787,7 +1094,7 @@
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); el.fileInput.click(); }
   });
   el.fileInput.addEventListener("change", function () {
-    if (el.fileInput.files && el.fileInput.files[0]) loadFile(el.fileInput.files[0]);
+    if (el.fileInput.files && el.fileInput.files.length) addFiles(el.fileInput.files);
     el.fileInput.value = "";
   });
   ["dragover", "dragenter"].forEach(function (ev) {
@@ -803,8 +1110,314 @@
     });
   });
   el.dropZone.addEventListener("drop", function (e) {
-    var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-    if (f) loadFile(f);
+    var fs = e.dataTransfer && e.dataTransfer.files;
+    if (fs && fs.length) addFiles(fs);
+  });
+
+  // ---- 滑块对比：左「简单反转」右「片基校正」 ----
+  function syncCompareBox() {
+    if (!el.compareOverlay || el.compareOverlay.hidden || !state.previewData) return;
+    var cv = el.canvas;
+    el.compareOverlay.style.left = cv.offsetLeft + "px";
+    el.compareOverlay.style.top = cv.offsetTop + "px";
+    el.compareOverlay.style.width = cv.offsetWidth + "px";
+    el.compareOverlay.style.height = cv.offsetHeight + "px";
+  }
+
+  function applySplit() {
+    if (!el.compareDivider) return;
+    var x = state.splitX * 100;
+    el.compareBefore.style.clipPath = "inset(0 " + (100 - x).toFixed(3) + "% 0 0)";
+    el.compareDivider.style.left = x.toFixed(3) + "%";
+  }
+
+  function rebuildCompareBefore() {
+    if (!state.previewData || !el.compareBefore) return;
+    var c = el.compareBefore;
+    if (c.width !== state.previewW) c.width = state.previewW;
+    if (c.height !== state.previewH) c.height = state.previewH;
+    var ctx = c.getContext("2d");
+    var out = ctx.createImageData(state.previewW, state.previewH);
+    var s = state.previewData.data, d = out.data;
+    for (var i = 0; i < s.length; i += 4) {
+      d[i] = 255 - s[i];
+      d[i + 1] = 255 - s[i + 1];
+      d[i + 2] = 255 - s[i + 2];
+      d[i + 3] = s[i + 3];
+    }
+    ctx.putImageData(out, 0, 0);
+    syncCompareBox();
+    applySplit();
+  }
+
+  el.btnCompareSplit.addEventListener("click", function () {
+    if (!state.previewData) return;
+    state.splitOn = !state.splitOn;
+    el.btnCompareSplit.classList.toggle("is-active", state.splitOn);
+    el.btnCompareSplit.textContent = state.splitOn ? "关闭对比" : "对比模式";
+    if (state.splitOn) {
+      el.compareOverlay.hidden = false;
+      rebuildCompareBefore();
+    } else {
+      el.compareOverlay.hidden = true;
+    }
+  });
+
+  var splitDrag = false;
+  function updateSplitFromEvent(e) {
+    var rect = el.compareOverlay.getBoundingClientRect();
+    if (!rect.width) return;
+    state.splitX = clamp((e.clientX - rect.left) / rect.width, 0.02, 0.98);
+    applySplit();
+  }
+  el.compareDivider.addEventListener("pointerdown", function (e) {
+    e.preventDefault();
+    splitDrag = true;
+    try { el.compareDivider.setPointerCapture(e.pointerId); } catch (err) { /* 老浏览器忽略 */ }
+    updateSplitFromEvent(e);
+  });
+  el.compareDivider.addEventListener("pointermove", function (e) {
+    if (splitDrag) updateSplitFromEvent(e);
+  });
+  ["pointerup", "pointercancel"].forEach(function (ev) {
+    el.compareDivider.addEventListener(ev, function () { splitDrag = false; });
+  });
+  window.addEventListener("resize", function () { syncCompareBox(); });
+
+  // ---- 单图参数 JSON 导入 / 导出 ----
+  el.btnExportParams.addEventListener("click", function () {
+    if (!state.previewData) return;
+    var payload = {
+      app: "flowerdeer-film-negative",
+      version: 1,
+      name: state.srcName,
+      width: state.fullW,
+      height: state.fullH,
+      base: [state.base[0], state.base[1], state.base[2]],
+      baseSource: state.baseSource,
+      adjustments: copyAdj(state.adj),
+    };
+    var blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = (baseName(state.srcName || "negative") || "negative") + "-params.json";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+    setStatus("已导出参数文件（片基色 + 8 项调色参数）。");
+  });
+
+  el.btnImportParams.addEventListener("click", function () { el.paramsInput.click(); });
+  el.paramsInput.addEventListener("change", function () {
+    var f = el.paramsInput.files && el.paramsInput.files[0];
+    el.paramsInput.value = "";
+    if (!f) return;
+    f.text().then(function (txt) {
+      var obj;
+      try { obj = JSON.parse(txt); } catch (e) { setStatus("参数文件解析失败：不是合法 JSON。"); return; }
+      if (!obj || !obj.adjustments || !Array.isArray(obj.base) || obj.base.length < 3) {
+        setStatus("参数文件不匹配：缺少必需字段，请使用本工具导出的参数文件。");
+        return;
+      }
+      if (!state.previewData) { setStatus("请先载入图片再导入参数。"); return; }
+      var note = "";
+      if (obj.width && obj.height && (obj.width !== state.fullW || obj.height !== state.fullH)) {
+        note = "注意：参数来自 " + obj.width + "×" + obj.height + "，与当前图片 " + state.fullW + "×" + state.fullH + " 尺寸不一致，效果可能有偏差。";
+      }
+      Object.keys(ADJUSTMENTS).forEach(function (k) {
+        var v = obj.adjustments[k];
+        var spec = ADJUSTMENTS[k];
+        state.adj[k] = (typeof v === "number" && isFinite(v)) ? clamp(v, spec.min, spec.max) : spec.default;
+        var s = sliderEls[k];
+        s.input.value = String(state.adj[k]);
+        s.value.textContent = s.spec.fmt(state.adj[k]);
+      });
+      state.base = [roundClamp(obj.base[0]), roundClamp(obj.base[1]), roundClamp(obj.base[2])];
+      state.baseSource = obj.baseSource === "manual" ? "manual" : "sync";
+      state.analysis = analyze(state.previewData.data, state.base);
+      updateBaseUI();
+      updateBaseMessage("已导入参数文件" + (obj.name ? "（来自 " + obj.name + "）" : "") + "。");
+      markEdited();
+      doRender();
+      setStatus("已应用导入的参数。" + note);
+    }).catch(function (err) {
+      console.error(err);
+      setStatus("读取参数文件失败：" + (err && err.message ? err.message : "未知错误"));
+    });
+  });
+
+  // ---- 批量应用 ----
+  el.btnApplyAdjAll.addEventListener("click", function () {
+    if (!state.previewData || state.queue.length < 2) return;
+    var src = copyAdj(state.adj);
+    var n = 0;
+    state.queue.forEach(function (q) {
+      if (q.id === state.curId) return;
+      q.adj = copyAdj(src);
+      if (!adjIsDefault(q.adj)) q.edited = true;
+      n += 1;
+    });
+    renderQueue();
+    setStatus("已把当前 8 项调色参数应用到其余 " + n + " 张。");
+  });
+
+  el.btnApplyBaseAll.addEventListener("click", function () {
+    if (!state.previewData || state.queue.length < 2) return;
+    var b = [state.base[0], state.base[1], state.base[2]];
+    var n = 0;
+    state.queue.forEach(function (q) {
+      if (q.id === state.curId) return;
+      q.base = b.slice();
+      q.baseSource = "sync";
+      n += 1;
+    });
+    renderQueue();
+    setStatus("已把当前片基同步到其余 " + n + " 张（适合同一卷胶片）。");
+  });
+
+  el.btnResetAll.addEventListener("click", function () {
+    if (!state.queue.length || !state.previewData) return;
+    state.queue.forEach(function (q) {
+      q.adj = null;
+      q.edited = false;
+    });
+    resetAdjustments();
+    var cur = currentItem();
+    if (cur) cur.edited = false;
+    renderQueue();
+    setStatus("已重置全部 " + state.queue.length + " 张的调色参数（片基保持各自识别结果）。");
+  });
+
+  // ---- 批量 ZIP 导出 ----
+  function uniqueZipName(name, used) {
+    if (!used[name]) { used[name] = 1; return name; }
+    var i = name.lastIndexOf(".");
+    var stem = i > 0 ? name.slice(0, i) : name;
+    var ext = i > 0 ? name.slice(i) : "";
+    var n = 2;
+    while (used[stem + "-" + n + ext]) n += 1;
+    var fn = stem + "-" + n + ext;
+    used[fn] = 1;
+    return fn;
+  }
+
+  // 单张队列项 → 全分辨率 Blob（批量导出用）
+  function exportItemToBlob(item, fmtChoice) {
+    var choice = fmtChoice;
+    if (choice === "original") {
+      var e = item.ext;
+      choice = (e === "tif" || e === "tiff") ? "tiff" :
+        e === "png" ? "png" :
+        e === "webp" ? "webp" :
+        (e === "jpg" || e === "jpeg") ? "jpeg" : "png";
+    }
+    return decodeFile(item.file).then(function (bmp) {
+      var w = bmp.width, h = bmp.height;
+      var scale = Math.min(1, 1600 / Math.max(w, h));
+      var pw = Math.max(1, Math.round(w * scale));
+      var ph = Math.max(1, Math.round(h * scale));
+      var pc = document.createElement("canvas");
+      pc.width = pw; pc.height = ph;
+      var pctx = pc.getContext("2d");
+      pctx.imageSmoothingQuality = "high";
+      pctx.drawImage(bmp, 0, 0, pw, ph);
+      var pdata = pctx.getImageData(0, 0, pw, ph);
+      var base = (item.base && item.base.length === 3) ? item.base.slice() : autoDetectBase(pdata.data, pw, ph).rgb;
+      var analysis = analyze(pdata.data, base);
+      var adj = item.adj ? copyAdj(item.adj) : defaultAdjustments();
+      var cnv = document.createElement("canvas");
+      cnv.width = w; cnv.height = h;
+      var ctx = cnv.getContext("2d");
+      ctx.drawImage(bmp, 0, 0, w, h);
+      var src = ctx.getImageData(0, 0, w, h);
+      var out = ctx.createImageData(w, h);
+      render(src.data, out.data, base, adj, analysis);
+      ctx.putImageData(out, 0, 0);
+      if (bmp.close) bmp.close();
+      if (choice === "tiff") {
+        return { blob: encodeTiffRgb(out.data, w, h), filename: baseName(item.name) + "-converted.tiff" };
+      }
+      var spec = EXPORT_SPECS[choice] || EXPORT_SPECS.png;
+      return canvasToBlob(cnv, spec.mime, spec.quality).then(function (blob) {
+        return { blob: blob, filename: baseName(item.name) + "-converted." + spec.ext };
+      });
+    });
+  }
+
+  el.btnExportZip.addEventListener("click", function () {
+    if (state.queue.length < 2) return;
+    if (typeof JSZip === "undefined") {
+      setStatus("打包组件未加载（JSZip 缺失），请刷新页面重试。");
+      return;
+    }
+    saveCurrentToQueue();
+    var fmt = el.exportFormat ? el.exportFormat.value : "jpeg";
+    var fmtLabel = fmt === "original" ? "原图格式" :
+      fmt === "tiff" ? "TIFF" : (EXPORT_SPECS[fmt] ? EXPORT_SPECS[fmt].label : "JPEG");
+    if (!window.confirm("将按「" + fmtLabel + "」逐张全分辨率处理并打包 " + state.queue.length + " 张图片，继续？")) return;
+    el.btnExportZip.disabled = true;
+    el.btnExport.disabled = true;
+    var zip = new JSZip();
+    var used = {};
+    var idx = 0;
+    var done = 0;
+    var fail = 0;
+    (function step() {
+      if (idx >= state.queue.length) {
+        if (!done) {
+          setStatus("打包失败：没有图片被成功处理。");
+          el.btnExportZip.disabled = state.queue.length < 2;
+          el.btnExport.disabled = false;
+          return;
+        }
+        setStatus("正在压缩生成 ZIP…");
+        zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 1 } }).then(function (blob) {
+          var url = URL.createObjectURL(blob);
+          var a = document.createElement("a");
+          a.href = url;
+          a.download = (baseName(state.srcName || "negatives") || "negatives") + "-batch.zip";
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(function () { URL.revokeObjectURL(url); }, 15000);
+          setStatus("已导出 ZIP：" + done + " 张" + (fail ? "（" + fail + " 张失败跳过）" : "") + "，" + (blob.size / 1048576).toFixed(1) + " MB。");
+          el.btnExportZip.disabled = state.queue.length < 2;
+          el.btnExport.disabled = false;
+        }).catch(function (err) {
+          console.error(err);
+          setStatus("打包失败：" + (err && err.message ? err.message : "未知错误"));
+          el.btnExportZip.disabled = state.queue.length < 2;
+          el.btnExport.disabled = false;
+        });
+        return;
+      }
+      var item = state.queue[idx];
+      idx += 1;
+      setStatus("批量处理 " + idx + "/" + state.queue.length + "：" + item.name + "…");
+      setTimeout(function () {
+        exportItemToBlob(item, fmt).then(function (entry) {
+          zip.file(uniqueZipName(entry.filename, used), entry.blob);
+          done += 1;
+          step();
+        }).catch(function (err) {
+          console.error(err);
+          fail += 1;
+          step();
+        });
+      }, 20);
+    })();
+  });
+
+  // 画布区也支持拖放新图（队列已有图时 drop-zone 是隐藏的）
+  ["dragover", "dragenter"].forEach(function (ev) {
+    el.canvasWrap.addEventListener(ev, function (e) { e.preventDefault(); });
+  });
+  el.canvasWrap.addEventListener("drop", function (e) {
+    e.preventDefault();
+    var fs = e.dataTransfer && e.dataTransfer.files;
+    if (fs && fs.length) addFiles(fs);
   });
 
   buildSliders();
