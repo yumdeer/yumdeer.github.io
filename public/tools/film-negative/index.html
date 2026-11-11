@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="负片校正工具：自动识别片基色，在本地把扫描负片还原为正片，支持多图队列、滑块对比、参数导入导出与批量 ZIP 导出。图片不上传服务器。">
   <title>负片校正 - flowerdeer 小工具</title>
-  <link rel="stylesheet" href="styles.css?v=1.0.5">
+  <link rel="stylesheet" href="styles.css?v=1.0.6">
 </head>
 <body>
   <header class="topbar">
@@ -22,11 +22,20 @@
           <h2>原始负片</h2>
           <span id="input-tag" class="tag">未载入</span>
         </div>
+        <div id="mini-drop" class="mini-drop" tabindex="0" role="button" aria-label="选择或拖入负片照片">＋ 选择或拖入负片照片</div>
         <div id="neg-preview" class="neg-preview" hidden>
           <canvas id="neg-thumb"></canvas>
         </div>
         <p id="neg-file" class="neg-file">尚未载入图片</p>
-        <p id="neg-size" class="card-note" hidden></p>
+        <dl class="info-list" id="neg-info" hidden>
+          <div class="info-row"><dt>尺寸</dt><dd id="neg-size">—</dd></div>
+          <div class="info-row"><dt>预览</dt><dd id="neg-prev-size">—</dd></div>
+          <div class="info-row"><dt>输出</dt><dd id="neg-out-size">—</dd></div>
+          <div class="info-row"><dt>构图</dt><dd id="neg-crop-label">—</dd></div>
+        </dl>
+        <div class="card-actions">
+          <button id="btn-edit-comp" class="ghost-btn mini" type="button" disabled>编辑构图</button>
+        </div>
       </div>
       <div class="card">
         <div class="card-head">
@@ -42,6 +51,15 @@
           <button id="btn-manual-base" class="ghost-btn" disabled>手动取样</button>
         </div>
         <p id="base-message" class="card-note">载入图片后自动识别画面边缘的未曝光片基。</p>
+        <label class="split-row">采样半径
+          <input type="range" id="sample-radius" min="4" max="32" step="1" value="12" disabled aria-label="手动采样半径">
+          <span id="sample-radius-value" class="value">12 px</span>
+        </label>
+        <p class="card-note">开启手动取样后，点击画面中未曝光的片基区域可覆盖自动识别结果。</p>
+        <dl class="info-list" id="base-stats" hidden>
+          <div class="info-row"><dt>置信度</dt><dd id="base-confidence">—</dd></div>
+          <div class="info-row"><dt>范围</dt><dd id="base-range">—</dd></div>
+        </dl>
       </div>
     </aside>
     <section class="stage">
@@ -137,26 +155,35 @@
       </div>
       <div class="card">
         <div class="card-head">
-          <h2>批量</h2>
-          <span class="card-note-inline">队列 <span id="queue-count">0</span>/12</span>
+          <h2>待处理队列</h2>
+          <span class="card-note-inline"><span id="queue-count">0</span>/12 · 已编辑 <span id="queue-edited">0</span></span>
         </div>
+        <p class="card-note">选择一张图片进行编辑，「导出」仅作用于选中图片；批量导出按下方输出方式执行。</p>
         <div class="batch-grid">
           <button id="btn-apply-adj-all" class="ghost-btn" disabled>调色到全部</button>
+          <button id="btn-apply-adj-unproc" class="ghost-btn" disabled>调色到未处理</button>
           <button id="btn-apply-base-all" class="ghost-btn" disabled>片基到全部</button>
-          <button id="btn-reset-all" class="ghost-btn" disabled>重置全部</button>
+          <button id="btn-apply-base-unproc" class="ghost-btn" disabled>片基到未处理</button>
+          <button id="btn-import-params-queue" class="ghost-btn" disabled>队列导入参数</button>
+          <button id="btn-reset-all" class="ghost-btn" disabled>重置全部参数</button>
         </div>
+        <fieldset class="output-mode">
+          <legend>输出方式</legend>
+          <label class="om-row"><input type="radio" name="output-mode" value="folder" checked>保存到文件夹<em>推荐，低内存</em></label>
+          <label class="om-row"><input type="radio" name="output-mode" value="split">自动分卷 ZIP<em>跨浏览器</em></label>
+          <label class="om-row"><input type="radio" name="output-mode" value="single">单一 ZIP<em>兼容旧行为</em></label>
+        </fieldset>
+        <label class="split-row" id="zip-split-row" hidden>ZIP 分卷
+          <select id="zip-split" class="format-select" aria-label="ZIP 分卷大小">
+            <option value="500">500 MB / 卷</option>
+            <option value="1000">1 GB / 卷</option>
+            <option value="2000">2 GB / 卷</option>
+          </select>
+        </label>
         <div class="card-actions">
-          <button id="btn-export-dir" class="ghost-btn" disabled>导出到文件夹</button>
-          <label class="split-row">ZIP 分卷
-            <select id="zip-split" class="format-select" aria-label="ZIP 分卷大小">
-              <option value="0">不分割</option>
-              <option value="500">500 MB / 卷</option>
-              <option value="1000">1 GB / 卷</option>
-              <option value="2000">2 GB / 卷</option>
-            </select>
-          </label>
+          <button id="btn-export-dir" class="primary-btn" disabled>保存到文件夹</button>
+          <button id="btn-export-zip" class="primary-btn" hidden disabled>导出全部 ZIP</button>
         </div>
-        <p class="card-note">同一卷胶片可用「片基到全部」同步片基色；「调色到全部」把 8 项调色参数复制到其余图片；「重置全部」只重置调色参数，不动片基。批量导出前会预估峰值内存，高风险时建议改用文件夹直写或分卷。</p>
       </div>
     </aside>
   </main>
@@ -172,6 +199,6 @@
   <script src="lib/pako.min.js"></script>
   <script src="lib/UTIF.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script src="app.js?v=1.0.4"></script>
+  <script src="app.js?v=1.0.5"></script>
 </body>
 </html>
