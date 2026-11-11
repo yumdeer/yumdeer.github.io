@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="负片校正工具：自动识别片基色，在本地把扫描负片还原为正片，支持多图队列、滑块对比、参数导入导出与批量 ZIP 导出。图片不上传服务器。">
   <title>负片校正 - flowerdeer 小工具</title>
-  <link rel="stylesheet" href="styles.css?v=1.0.6">
+  <link rel="stylesheet" href="styles.css?v=1.0.7">
 </head>
 <body>
   <header class="topbar">
@@ -22,7 +22,10 @@
           <h2>原始负片</h2>
           <span id="input-tag" class="tag">未载入</span>
         </div>
-        <div id="mini-drop" class="mini-drop" tabindex="0" role="button" aria-label="选择或拖入负片照片">＋ 选择或拖入负片照片</div>
+        <div id="mini-drop" class="mini-drop" tabindex="0" role="button" aria-label="选择或拖入负片照片，支持 JPEG、PNG、WebP、TIFF、BMP、AVIF">
+          <span class="mini-drop-main">＋ 选择或拖入负片照片</span>
+          <span class="mini-drop-sub">支持 JPEG / PNG / WebP / TIFF / BMP / AVIF</span>
+        </div>
         <div id="neg-preview" class="neg-preview" hidden>
           <canvas id="neg-thumb"></canvas>
         </div>
@@ -73,7 +76,7 @@
               <path d="M10.4 13.6V9.8l3 1.9-3 1.9z" fill="currentColor" stroke="none"></path>
             </svg>
             <p class="drop-main">点击选择，或拖入负片扫描图</p>
-            <p class="drop-sub">支持 JPEG / PNG / WebP / TIFF / BMP，可多选（最多 12 张），全部在本机处理</p>
+            <p class="drop-sub">支持 JPEG / PNG / WebP / TIFF / BMP / AVIF，可多选（最多 12 张），全部在本机处理</p>
           </div>
           <input type="file" id="file-input" accept="image/jpeg,image/png,image/webp,image/tiff,image/bmp,image/avif,image/*,.tif,.tiff" multiple hidden>
         </div>
@@ -199,6 +202,6 @@
   <script src="lib/pako.min.js"></script>
   <script src="lib/UTIF.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script src="app.js?v=1.0.6"></script>
+  <script src="app.js?v=1.0.7"></script>
 </body>
 </html>

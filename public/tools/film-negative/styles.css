@@ -805,9 +805,10 @@ button:disabled {
 /* ---- INPUT 面板：迷你添加框 / 信息行 ---- */
 .mini-drop {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 3px;
   padding: 10px 8px;
   margin-bottom: 10px;
   border: 1.5px dashed var(--line);
@@ -816,7 +817,18 @@ button:disabled {
   color: var(--ink-soft);
   cursor: pointer;
   outline: none;
+  text-align: center;
   transition: background 0.2s, border-color 0.2s, color 0.2s;
+}
+
+.mini-drop-main {
+  line-height: 1.4;
+}
+
+.mini-drop-sub {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--ink-faint);
 }
 
 .mini-drop:hover,
