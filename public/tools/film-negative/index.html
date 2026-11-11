@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="负片校正工具：自动识别片基色，在本地把扫描负片还原为正片，支持多图队列、滑块对比、参数导入导出与批量 ZIP 导出。图片不上传服务器。">
   <title>负片校正 - flowerdeer 小工具</title>
-  <link rel="stylesheet" href="styles.css?v=1.0.3">
+  <link rel="stylesheet" href="styles.css?v=1.0.4">
 </head>
 <body>
   <header class="topbar">
@@ -40,7 +40,36 @@
             <span class="compare-tag compare-tag-after">片基校正</span>
             <div id="compare-divider" class="compare-divider"><span class="compare-handle"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1c1b18" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5"></path></svg></span></div>
           </div>
+          <div id="crop-overlay" class="crop-overlay" hidden>
+            <div id="crop-box" class="crop-box" data-handle="move">
+              <span class="crop-handle" data-handle="nw"></span>
+              <span class="crop-handle" data-handle="ne"></span>
+              <span class="crop-handle" data-handle="sw"></span>
+              <span class="crop-handle" data-handle="se"></span>
+            </div>
+          </div>
         </div>
+      </div>
+      <div id="tone-hint" class="tone-hint" hidden>
+        <span id="tone-text" class="tone-text"></span>
+        <span class="tone-actions">
+          <button id="btn-tone-toggle" class="ghost-btn mini" type="button">按正片处理</button>
+          <button id="btn-tone-ignore" class="ghost-btn mini" type="button">忽略</button>
+        </span>
+      </div>
+      <div id="crop-bar" class="crop-bar" hidden>
+        <span class="crop-label">裁剪</span>
+        <select id="crop-ratio" class="format-select" aria-label="裁剪比例">
+          <option value="0">自由</option>
+          <option value="1">1:1</option>
+          <option value="1.3333">4:3</option>
+          <option value="1.5">3:2</option>
+          <option value="1.7778">16:9</option>
+        </select>
+        <button id="btn-crop-apply" class="ghost-btn mini" type="button">应用</button>
+        <button id="btn-crop-cancel" class="ghost-btn mini" type="button">取消</button>
+        <button id="btn-crop-reset" class="ghost-btn mini" type="button">取消裁剪</button>
+        <span class="crop-tip">拖动四角调整范围，框内可整体移动</span>
       </div>
       <div id="queue-bar" class="queue-bar" hidden></div>
       <div class="stage-bar">
@@ -49,6 +78,7 @@
           <button id="btn-compare" class="ghost-btn" disabled>按住查看原片</button>
           <button id="btn-compare-split" class="ghost-btn" disabled>对比模式</button>
           <button id="btn-reset" class="ghost-btn" disabled>重置参数</button>
+          <button id="btn-crop" class="ghost-btn" disabled>裁剪</button>
           <select id="export-format" class="format-select" aria-label="导出格式" disabled>
             <option value="jpeg">JPEG</option>
             <option value="png">PNG</option>
@@ -101,7 +131,18 @@
           <button id="btn-apply-base-all" class="ghost-btn" disabled>片基到全部</button>
           <button id="btn-reset-all" class="ghost-btn" disabled>重置全部</button>
         </div>
-        <p class="card-note">同一卷胶片可用「片基到全部」同步片基色；「调色到全部」把 8 项调色参数复制到其余图片；「重置全部」只重置调色参数，不动片基。</p>
+        <div class="card-actions">
+          <button id="btn-export-dir" class="ghost-btn" disabled>导出到文件夹</button>
+          <label class="split-row">ZIP 分卷
+            <select id="zip-split" class="format-select" aria-label="ZIP 分卷大小">
+              <option value="0">不分割</option>
+              <option value="500">500 MB / 卷</option>
+              <option value="1000">1 GB / 卷</option>
+              <option value="2000">2 GB / 卷</option>
+            </select>
+          </label>
+        </div>
+        <p class="card-note">同一卷胶片可用「片基到全部」同步片基色；「调色到全部」把 8 项调色参数复制到其余图片；「重置全部」只重置调色参数，不动片基。批量导出前会预估峰值内存，高风险时建议改用文件夹直写或分卷。</p>
       </div>
     </aside>
   </main>
@@ -109,6 +150,6 @@
   <script src="lib/pako.min.js"></script>
   <script src="lib/UTIF.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script src="app.js?v=1.0.2"></script>
+  <script src="app.js?v=1.0.3"></script>
 </body>
 </html>
