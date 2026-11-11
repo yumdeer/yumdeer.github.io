@@ -172,6 +172,11 @@ const tools: Tool[] = [
     transform: translateX(3px);
   }
 
+  /* 深色模式下链接继承全局 a 的 #111，在深底上标题几乎不可见——覆盖为浅色 */
+  :global(.theme-dark) .tool-card {
+    color: #eee;
+  }
+
   :global(.theme-dark) .tool-card:hover {
     background: #141414;
   }
