@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="负片校正工具：自动识别片基色，在本地把扫描负片还原为正片，支持多图队列、滑块对比、参数导入导出与批量 ZIP 导出。图片不上传服务器。">
   <title>负片校正 - flowerdeer 小工具</title>
-  <link rel="stylesheet" href="styles.css?v=1.0.4">
+  <link rel="stylesheet" href="styles.css?v=1.0.5">
 </head>
 <body>
   <header class="topbar">
@@ -16,6 +16,34 @@
   </header>
 
   <main class="layout">
+    <aside class="panel input-panel">
+      <div class="card">
+        <div class="card-head">
+          <h2>原始负片</h2>
+          <span id="input-tag" class="tag">未载入</span>
+        </div>
+        <div id="neg-preview" class="neg-preview" hidden>
+          <canvas id="neg-thumb"></canvas>
+        </div>
+        <p id="neg-file" class="neg-file">尚未载入图片</p>
+        <p id="neg-size" class="card-note" hidden></p>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <h2>片基取样</h2>
+          <span id="base-source" class="tag">默认值</span>
+        </div>
+        <div class="base-row">
+          <span id="base-swatch" class="base-swatch" aria-hidden="true"></span>
+          <span id="base-rgb" class="base-rgb">RGB 211, 122, 78</span>
+        </div>
+        <div class="card-actions">
+          <button id="btn-auto-base" class="ghost-btn" disabled>自动识别</button>
+          <button id="btn-manual-base" class="ghost-btn" disabled>手动取样</button>
+        </div>
+        <p id="base-message" class="card-note">载入图片后自动识别画面边缘的未曝光片基。</p>
+      </div>
+    </aside>
     <section class="stage">
       <div class="stage-inner">
         <div id="drop-zone" class="drop-zone" tabindex="0" role="button" aria-label="选择或拖入负片扫描图">
@@ -77,6 +105,7 @@
         <span class="stage-actions">
           <button id="btn-compare" class="ghost-btn" disabled>按住查看原片</button>
           <button id="btn-compare-split" class="ghost-btn" disabled>对比模式</button>
+          <button id="btn-zoom" class="ghost-btn" disabled>查看大图</button>
           <button id="btn-reset" class="ghost-btn" disabled>重置参数</button>
           <button id="btn-crop" class="ghost-btn" disabled>裁剪</button>
           <select id="export-format" class="format-select" aria-label="导出格式" disabled>
@@ -92,22 +121,7 @@
       </div>
     </section>
 
-    <aside class="panel">
-      <div class="card">
-        <div class="card-head">
-          <h2>片基色</h2>
-          <span id="base-source" class="tag">默认值</span>
-        </div>
-        <div class="base-row">
-          <span id="base-swatch" class="base-swatch" aria-hidden="true"></span>
-          <span id="base-rgb" class="base-rgb">RGB 211, 122, 78</span>
-        </div>
-        <div class="card-actions">
-          <button id="btn-auto-base" class="ghost-btn" disabled>自动识别</button>
-          <button id="btn-manual-base" class="ghost-btn" disabled>手动取样</button>
-        </div>
-        <p id="base-message" class="card-note">载入图片后自动识别画面边缘的未曝光片基。</p>
-      </div>
+    <aside class="panel side-panel">
 
       <div class="card">
         <div class="card-head">
@@ -147,9 +161,17 @@
     </aside>
   </main>
 
+  <div id="lightbox" class="lightbox" hidden>
+    <div class="lightbox-head">
+      <span id="lightbox-title"></span>
+      <button id="btn-lightbox-close" class="ghost-btn mini" type="button">关闭</button>
+    </div>
+    <div class="lightbox-body"><canvas id="lightbox-canvas"></canvas></div>
+  </div>
+
   <script src="lib/pako.min.js"></script>
   <script src="lib/UTIF.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script src="app.js?v=1.0.3"></script>
+  <script src="app.js?v=1.0.4"></script>
 </body>
 </html>

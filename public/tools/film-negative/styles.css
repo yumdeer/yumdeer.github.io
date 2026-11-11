@@ -99,20 +99,52 @@ body {
 
 .layout {
   display: grid;
-  grid-template-columns: 1fr 300px;
+  grid-template-columns: 218px minmax(0, 1fr) 300px;
+  grid-template-areas: "input stage side";
   gap: 18px;
-  max-width: 1280px;
+  max-width: 1330px;
   margin: 0 auto;
   padding: 18px 22px 60px;
+}
+
+.input-panel {
+  grid-area: input;
+}
+
+.side-panel {
+  grid-area: side;
+}
+
+@media (max-width: 1180px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr) 300px;
+    grid-template-areas: "input input" "stage side";
+  }
+  .input-panel {
+    flex-direction: row;
+    align-items: stretch;
+  }
+  .input-panel .card {
+    flex: 1;
+    min-width: 0;
+  }
 }
 
 @media (max-width: 900px) {
   .layout {
     grid-template-columns: 1fr;
+    grid-template-areas: "input" "stage" "side";
+  }
+  .input-panel {
+    flex-direction: column;
+  }
+  .input-panel .card {
+    flex: none;
   }
 }
 
 .stage {
+  grid-area: stage;
   min-width: 0;
 }
 
@@ -699,4 +731,73 @@ button:disabled {
   flex: 1;
   padding: 4px 6px;
   font-size: 12px;
+}
+
+/* ---- 左侧原始负片面板 ---- */
+.neg-preview {
+  background: #14120f;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+
+.neg-preview canvas {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+.neg-file {
+  margin: 0 0 4px;
+  font-size: 12.5px;
+  color: var(--ink);
+  word-break: break-all;
+}
+
+/* ---- 查看大图灯箱 ---- */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  background: rgba(15, 13, 11, 0.93);
+  display: flex;
+  flex-direction: column;
+}
+
+.lightbox-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 18px;
+  color: #f2ede4;
+}
+
+.lightbox-head .ghost-btn.mini {
+  border-color: rgba(242, 237, 228, 0.4);
+  color: #f2ede4;
+}
+
+.lightbox-title {
+  font-size: 13px;
+  opacity: 0.85;
+  word-break: break-all;
+}
+
+.lightbox-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 26px 26px;
+}
+
+.lightbox-body canvas {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 3px;
+  box-shadow: 0 10px 44px rgba(0, 0, 0, 0.55);
 }

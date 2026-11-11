@@ -243,7 +243,7 @@
       roundClamp(percentile(hists[2], 0.995)),
     ];
     var confidence = clamp(count / 200000, 0.2, 0.9);
-    return { rgb: rgb, source: "auto", confidence: confidence, message: "边缘无法取样（遮罩式扫描或已裁边），已从画面内容估计片基。" };
+    return { rgb: rgb, source: "auto", confidence: confidence, message: "边缘无法取样（遮罩式扫描或已裁边），已从画面内容估计片基（基于 " + count + " 个采样像素）。" };
   }
 
   // 手动取样：以点击点为圆心取圆盘内像素的截尾均值
@@ -455,6 +455,16 @@
     btnToneIgnore: document.getElementById("btn-tone-ignore"),
     btnExportDir: document.getElementById("btn-export-dir"),
     zipSplit: document.getElementById("zip-split"),
+    btnZoom: document.getElementById("btn-zoom"),
+    lightbox: document.getElementById("lightbox"),
+    lightboxTitle: document.getElementById("lightbox-title"),
+    lightboxCanvas: document.getElementById("lightbox-canvas"),
+    btnLightboxClose: document.getElementById("btn-lightbox-close"),
+    inputTag: document.getElementById("input-tag"),
+    negPreview: document.getElementById("neg-preview"),
+    negThumb: document.getElementById("neg-thumb"),
+    negFile: document.getElementById("neg-file"),
+    negSize: document.getElementById("neg-size"),
   };
 
   var canvasCtx = el.canvas.getContext("2d");
@@ -480,6 +490,37 @@
 
   function updateBaseMessage(msg) {
     if (msg) el.baseMessage.textContent = msg;
+  }
+
+  // 左侧「原始负片」面板：缩略预览 + 文件信息 + 正负片标签
+  function updateInputPanel() {
+    if (!el.negThumb) return;
+    if (!state.previewData) {
+      el.negPreview.hidden = true;
+      el.negFile.textContent = "尚未载入图片";
+      el.negSize.hidden = true;
+      el.inputTag.textContent = "未载入";
+      return;
+    }
+    el.inputTag.textContent = state.positive ? "正片" : "负片";
+    var maxW = 200, maxH = 140;
+    var s = Math.min(maxW / state.previewW, maxH / state.previewH);
+    var tw = Math.max(1, Math.round(state.previewW * s));
+    var th = Math.max(1, Math.round(state.previewH * s));
+    el.negThumb.width = tw;
+    el.negThumb.height = th;
+    var tmp = document.createElement("canvas");
+    tmp.width = state.previewW;
+    tmp.height = state.previewH;
+    tmp.getContext("2d").putImageData(state.previewData, 0, 0);
+    var tc = el.negThumb.getContext("2d");
+    tc.imageSmoothingQuality = "high";
+    tc.clearRect(0, 0, tw, th);
+    tc.drawImage(tmp, 0, 0, tw, th);
+    el.negPreview.hidden = false;
+    el.negFile.textContent = state.srcName || "未命名";
+    el.negSize.textContent = "尺寸 " + state.fullW + " × " + state.fullH;
+    el.negSize.hidden = false;
   }
 
   // ---- 调整滑块 ----
@@ -798,6 +839,8 @@
       el.btnCompareSplit.textContent = "对比模式";
     }
     if (el.compareOverlay) el.compareOverlay.hidden = true;
+    if (el.lightbox) el.lightbox.hidden = true;
+    updateInputPanel();
     Object.keys(sliderEls).forEach(function (key) {
       var s = sliderEls[key];
       s.input.value = String(s.spec.default);
@@ -805,7 +848,7 @@
     });
     el.canvasWrap.hidden = true;
     el.dropZone.hidden = false;
-    [el.btnCompare, el.btnCompareSplit, el.btnReset, el.btnExport, el.btnAutoBase,
+    [el.btnCompare, el.btnCompareSplit, el.btnZoom, el.btnReset, el.btnExport, el.btnAutoBase,
      el.btnManualBase, el.btnExportParams, el.btnImportParams, el.btnApplyAdjAll,
      el.btnApplyBaseAll, el.btnResetAll, el.btnExportZip, el.btnCrop, el.btnExportDir].forEach(function (b) {
       if (b) b.disabled = true;
@@ -846,7 +889,7 @@
       state.srcExt = item.ext;
       el.dropZone.hidden = true;
       el.canvasWrap.hidden = false;
-      [el.btnCompare, el.btnCompareSplit, el.btnReset, el.btnExport, el.btnAutoBase,
+      [el.btnCompare, el.btnCompareSplit, el.btnZoom, el.btnReset, el.btnExport, el.btnAutoBase,
        el.btnManualBase, el.btnExportParams, el.btnImportParams, el.btnCrop].forEach(function (b) {
         if (b) b.disabled = false;
       });
@@ -889,8 +932,14 @@
       item.opened = true;
       updateBaseUI();
       updateBaseMessage(detected.message);
+      updateInputPanel();
       renderToneHint();
       doRender();
+      // 默认开启对比模式：直观展示「简单反转 vs 片基校正」；正片直通没有反转意义，保持关闭
+      state.splitOn = !state.positive;
+      el.btnCompareSplit.classList.toggle("is-active", state.splitOn);
+      el.btnCompareSplit.textContent = state.splitOn ? "关闭对比" : "对比模式";
+      el.compareOverlay.hidden = !state.splitOn;
       if (state.splitOn) rebuildCompareBefore();
       renderQueue();
       var pos = queueIndexOf(item.id);
@@ -1070,7 +1119,15 @@
     state.analysis = state.positive ? analyzePositive() : analyze(state.previewData.data, state.base);
     var item = currentItem();
     if (item) item.positive = state.positive;
+    // 正片直通没有「简单反转」对比意义，切换为正片时关闭对比模式
+    if (state.positive && state.splitOn) {
+      state.splitOn = false;
+      el.btnCompareSplit.classList.remove("is-active");
+      el.btnCompareSplit.textContent = "对比模式";
+      el.compareOverlay.hidden = true;
+    }
     updateBaseUI();
+    updateInputPanel();
     renderToneHint();
     markEdited();
     doRender();
@@ -1158,7 +1215,10 @@
     var item = currentItem();
     if (item) item.crop = state.crop ? { x: state.crop.x, y: state.crop.y, w: state.crop.w, h: state.crop.h } : null;
     doRender();
-    if (state.splitOn) rebuildCompareBefore();
+    if (state.splitOn) {
+      el.compareOverlay.hidden = false;
+      rebuildCompareBefore();
+    }
     markEdited();
     setStatus(apply && state.crop
       ? "已应用裁剪：" + Math.round(state.crop.w * state.fullW) + " × " + Math.round(state.crop.h * state.fullH)
@@ -1180,7 +1240,10 @@
       paintCropBox();
     } else {
       doRender();
-      if (state.splitOn) rebuildCompareBefore();
+      if (state.splitOn) {
+        el.compareOverlay.hidden = false;
+        rebuildCompareBefore();
+      }
       markEdited();
     }
     setStatus("已取消裁剪，恢复整幅画面。");
@@ -1524,6 +1587,55 @@
     } else {
       el.compareOverlay.hidden = true;
     }
+  });
+
+  // ---- 查看大图 ----
+  function openLightbox() {
+    if (!state.previewData || !state.bitmap) return;
+    var w = state.bitmap.width, h = state.bitmap.height;
+    setStatus("正在生成大图…");
+    setTimeout(function () {
+      try {
+        var cnv = document.createElement("canvas");
+        cnv.width = w; cnv.height = h;
+        var ctx = cnv.getContext("2d");
+        ctx.drawImage(state.bitmap, 0, 0, w, h);
+        var src = ctx.getImageData(0, 0, w, h);
+        var analysis = state.positive ? analyzePositive() : analyze(src.data, state.base);
+        var out = ctx.createImageData(w, h);
+        render(src.data, out.data, state.base, state.adj, analysis);
+        ctx.putImageData(out, 0, 0);
+        var shown = cnv;
+        var rect = cropRectPx(state.crop, w, h);
+        if (rect) {
+          shown = document.createElement("canvas");
+          shown.width = rect.w;
+          shown.height = rect.h;
+          shown.getContext("2d").drawImage(cnv, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h);
+        }
+        el.lightboxCanvas.width = shown.width;
+        el.lightboxCanvas.height = shown.height;
+        el.lightboxCanvas.getContext("2d").drawImage(shown, 0, 0);
+        el.lightboxTitle.textContent = state.srcName + " · " + shown.width + " × " + shown.height;
+        el.lightbox.hidden = false;
+        setStatus("大图已打开：" + shown.width + " × " + shown.height + "（Esc 或点击空白处关闭）");
+      } catch (err) {
+        console.error(err);
+        setStatus("生成大图失败：" + (err && err.message ? err.message : err));
+      }
+    }, 30);
+  }
+  function closeLightbox() {
+    el.lightbox.hidden = true;
+    setStatus(state.srcName ? state.srcName + " · 大图已关闭。" : "等待载入图片");
+  }
+  el.btnZoom.addEventListener("click", openLightbox);
+  el.btnLightboxClose.addEventListener("click", closeLightbox);
+  el.lightbox.addEventListener("click", function (e) {
+    if (e.target === el.lightbox) closeLightbox();
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && !el.lightbox.hidden) closeLightbox();
   });
 
   var splitDrag = false;
