@@ -33,6 +33,11 @@
   box-sizing: border-box;
 }
 
+/* 作者样式里的 display 会覆盖 UA 的 [hidden]，这里强制生效 */
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   margin: 0;
