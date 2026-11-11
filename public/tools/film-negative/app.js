@@ -439,6 +439,7 @@
     btnResetAll: document.getElementById("btn-reset-all"),
     btnExportParams: document.getElementById("btn-export-params"),
     btnImportParams: document.getElementById("btn-import-params"),
+    btnResetAdj: document.getElementById("btn-reset-adj"),
     paramsInput: document.getElementById("params-input"),
     compareOverlay: document.getElementById("compare-overlay"),
     compareBefore: document.getElementById("compare-before"),
@@ -916,7 +917,7 @@
     el.canvasWrap.hidden = true;
     el.dropZone.hidden = false;
     [el.btnCompare, el.btnCompareSplit, el.btnZoom, el.btnReset, el.btnExport, el.btnAutoBase,
-     el.btnManualBase, el.btnExportParams, el.btnImportParams, el.btnApplyAdjAll,
+     el.btnManualBase, el.btnExportParams, el.btnImportParams, el.btnResetAdj, el.btnApplyAdjAll,
      el.btnApplyAdjUnproc, el.btnApplyBaseUnproc, el.btnImportParamsQueue, el.btnApplyBaseAll,
      el.btnEditComp, el.btnResetAll, el.btnExportZip, el.btnCrop, el.btnExportDir].forEach(function (b) {
       if (b) b.disabled = true;
@@ -958,7 +959,7 @@
       el.dropZone.hidden = true;
       el.canvasWrap.hidden = false;
       [el.btnCompare, el.btnCompareSplit, el.btnZoom, el.btnReset, el.btnExport, el.btnAutoBase,
-       el.btnManualBase, el.btnExportParams, el.btnImportParams, el.btnCrop].forEach(function (b) {
+       el.btnManualBase, el.btnExportParams, el.btnImportParams, el.btnResetAdj, el.btnCrop].forEach(function (b) {
         if (b) b.disabled = false;
       });
       if (el.btnExportDir) el.btnExportDir.disabled = !window.showDirectoryPicker;
@@ -1183,10 +1184,13 @@
     el.btnCompare.addEventListener(ev, function () { showOriginal(false); });
   });
 
-  el.btnReset.addEventListener("click", function () {
+  function resetAllAdjustments() {
     resetAdjustments();
     markEdited();
-  });
+    setStatus("已把 8 项调色参数恢复为默认值。");
+  }
+  el.btnReset.addEventListener("click", resetAllAdjustments);
+  if (el.btnResetAdj) el.btnResetAdj.addEventListener("click", resetAllAdjustments);
 
   // ---- 正负片提示 ----
   function renderToneHint() {
