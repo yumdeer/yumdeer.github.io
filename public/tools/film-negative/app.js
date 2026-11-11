@@ -646,6 +646,21 @@
   }
 
   // 把完整预览图按当前裁剪框绘制到画布（负偏移自动裁切）
+  // 画布显示尺寸：contain 适配舞台可用区域——小图放大填充，大图等比缩小
+  function fitCanvasDisplay() {
+    if (!state.previewData || !el.canvas) return;
+    var stageEl = document.querySelector(".stage-inner");
+    if (!stageEl) return;
+    var availW = Math.max(160, stageEl.clientWidth);
+    var availH = Math.max(240, window.innerHeight * 0.78);
+    var cw = el.canvas.width || 1, ch = el.canvas.height || 1;
+    var ar = cw / ch;
+    var w = Math.min(availW, availH * ar);
+    var h = w / ar;
+    el.canvas.style.width = Math.round(w) + "px";
+    el.canvas.style.height = Math.round(h) + "px";
+  }
+
   function blitPreview(imgData) {
     var rect = cropPxOf(state.previewW, state.previewH);
     var w = rect ? rect.w : state.previewW;
@@ -655,6 +670,7 @@
     canvasCtx.clearRect(0, 0, w, h);
     if (rect) canvasCtx.putImageData(imgData, -rect.x, -rect.y);
     else canvasCtx.putImageData(imgData, 0, 0);
+    fitCanvasDisplay();
     syncCompareBox();
     if (state.splitOn && el.compareDivider) applySplit();
   }
@@ -1718,6 +1734,18 @@
   });
   document.addEventListener("keydown", function (e) {
     if (e.key === "Escape" && !el.lightbox.hidden) closeLightbox();
+  });
+
+  // ---- 窗口缩放时重新适配画布显示尺寸 ----
+  var canvasResizeTimer = null;
+  window.addEventListener("resize", function () {
+    if (!state.previewData) return;
+    clearTimeout(canvasResizeTimer);
+    canvasResizeTimer = setTimeout(function () {
+      fitCanvasDisplay();
+      syncCompareBox();
+      if (state.splitOn && el.compareDivider) applySplit();
+    }, 120);
   });
 
   // ---- 采样半径 / 编辑构图 / 迷你添加框 ----
