@@ -1418,9 +1418,7 @@
       el.compareOverlay.hidden = !state.splitOn;
       if (state.splitOn) rebuildCompareBefore();
       renderQueue();
-      var pos = queueIndexOf(item.id);
-      setStatus(item.name + " · " + bitmap.width + " × " + bitmap.height +
-        (pos >= 0 ? " · 第 " + (pos + 1) + "/" + state.queue.length + " 张" : ""));
+      setStatus("");
     }).catch(function (err) {
       console.error(err);
       setStatus("图片解码失败：" + (err && err.message ? err.message : "不支持的格式"));
