@@ -66,6 +66,36 @@ const tools: Tool[] = [
       ))}
     </ul>
   </div>
+
+  <div class="donate" data-donate>
+    <div class="donate-card" id="donate-card" data-donate-card hidden>
+      <button class="donate-close" type="button" aria-label="关闭" data-donate-close>×</button>
+      <p class="donate-title">赞赏支持</p>
+      <p class="donate-desc">这些小工具都是业余时间做的，如果它们帮到了你，欢迎请我喝杯咖啡。</p>
+      <a
+        class="donate-link"
+        href="https://afdian.com/u/ce77d984de4311f18a2952540083324c"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        去爱发电支持 <span aria-hidden="true">↗</span>
+      </a>
+      <p class="donate-note">赞赏完全自愿，一次即可。</p>
+    </div>
+    <button
+      class="donate-fab"
+      type="button"
+      aria-expanded="false"
+      aria-controls="donate-card"
+      aria-label="赞赏支持"
+      data-donate-toggle
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 20.5s-7.5-4.6-7.5-10a4.3 4.3 0 0 1 7.5-2.8 4.3 4.3 0 0 1 7.5 2.8c0 5.4-7.5 10-7.5 10z"></path>
+      </svg>
+      <span>赞赏</span>
+    </button>
+  </div>
 </Layout>
 
 <style>
@@ -199,4 +229,228 @@ const tools: Tool[] = [
       padding: 0 20px 80px;
     }
   }
+
+  /* ── 右下角赞赏入口 ─────────────────────────────────────────────────── */
+
+  .donate {
+    position: fixed;
+    right: 24px;
+    bottom: 24px;
+    z-index: 60;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 10px;
+  }
+
+  .donate-fab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 40px;
+    padding: 0 16px;
+    border: 1px solid #e4e4e4;
+    border-radius: 999px;
+    background: #fff;
+    color: #111;
+    font: inherit;
+    font-size: 12px;
+    letter-spacing: 1px;
+    cursor: pointer;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
+    transition: transform 0.2s, box-shadow 0.2s, background 0.2s;
+  }
+
+  .donate-fab:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 10px 26px rgba(0, 0, 0, 0.12);
+  }
+
+  .donate-fab svg {
+    width: 15px;
+    height: 15px;
+  }
+
+  .donate-card {
+    position: relative;
+    width: 236px;
+    padding: 18px 18px 16px;
+    border: 1px solid #eee;
+    border-radius: 12px;
+    background: #fff;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.12);
+    animation: donate-in 0.18s ease-out;
+  }
+
+  @keyframes donate-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .donate-close {
+    position: absolute;
+    top: 8px;
+    right: 10px;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    color: #bbb;
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .donate-close:hover {
+    color: #111;
+  }
+
+  .donate-title {
+    font-size: 13px;
+    letter-spacing: 0.5px;
+    margin-bottom: 8px;
+  }
+
+  .donate-desc {
+    font-size: 12px;
+    line-height: 1.8;
+    color: #777;
+    margin-bottom: 14px;
+  }
+
+  .donate-link {
+    display: block;
+    padding: 9px 0;
+    border-radius: 6px;
+    background: #111;
+    color: #fff;
+    font-size: 12px;
+    letter-spacing: 0.5px;
+    text-align: center;
+    transition: opacity 0.2s;
+  }
+
+  .donate-link:hover {
+    text-decoration: none;
+    opacity: 0.85;
+  }
+
+  .donate-note {
+    margin-top: 10px;
+    font-size: 11px;
+    line-height: 1.7;
+    color: #bbb;
+  }
+
+  :global(.theme-dark) .donate-fab {
+    background: #141414;
+    border-color: #2b2b2b;
+    color: #eee;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  }
+
+  :global(.theme-dark) .donate-card {
+    background: #141414;
+    border-color: #2b2b2b;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  }
+
+  :global(.theme-dark) .donate-title {
+    color: #eee;
+  }
+
+  :global(.theme-dark) .donate-desc,
+  :global(.theme-dark) .donate-note,
+  :global(.theme-dark) .donate-close {
+    color: #8a8a8a;
+  }
+
+  :global(.theme-dark) .donate-close:hover {
+    color: #eee;
+  }
+
+  :global(.theme-dark) .donate-link {
+    background: #eee;
+    color: #111;
+  }
+
+  @media (max-width: 640px) {
+    .donate {
+      right: 16px;
+      bottom: 16px;
+    }
+
+    .donate-card {
+      width: min(236px, calc(100vw - 32px));
+    }
+  }
 </style>
+
+<script>
+  // 右下角赞赏入口：点击展开小卡片，点击外部或按 Esc 关闭。
+  // ClientRouter 会替换 DOM，每次 astro:page-load 都重新初始化并释放旧监听。
+  let donateAbort: AbortController | null = null;
+
+  function initDonate() {
+    donateAbort?.abort();
+
+    const root = document.querySelector<HTMLElement>('[data-donate]');
+    const card = root?.querySelector<HTMLElement>('[data-donate-card]');
+    const toggle = root?.querySelector<HTMLButtonElement>('[data-donate-toggle]');
+    if (!root || !card || !toggle) return;
+
+    const ac = new AbortController();
+    donateAbort = ac;
+    const { signal } = ac;
+
+    const setOpen = (open: boolean) => {
+      card.hidden = !open;
+      toggle.setAttribute('aria-expanded', String(open));
+    };
+
+    toggle.addEventListener(
+      'click',
+      (event) => {
+        event.stopPropagation();
+        setOpen(card.hidden);
+      },
+      { signal }
+    );
+
+    root.querySelector('[data-donate-close]')?.addEventListener(
+      'click',
+      () => {
+        setOpen(false);
+        toggle.focus();
+      },
+      { signal }
+    );
+
+    document.addEventListener(
+      'click',
+      (event) => {
+        if (card.hidden || root.contains(event.target as Node)) return;
+        setOpen(false);
+      },
+      { signal }
+    );
+
+    document.addEventListener(
+      'keydown',
+      (event) => {
+        if (event.key !== 'Escape' || card.hidden) return;
+        setOpen(false);
+        toggle.focus();
+      },
+      { signal }
+    );
+  }
+
+  initDonate();
+  document.addEventListener('astro:page-load', initDonate);
+</script>
