@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="负片校正工具：自动识别片基色，在本地把扫描负片还原为正片，支持多图队列、滑块对比、参数导入导出与批量 ZIP 导出。图片不上传服务器。">
   <title>负片校正 - flowerdeer 小工具</title>
-  <link rel="stylesheet" href="styles.css?v=1.0.8">
+  <link rel="stylesheet" href="styles.css?v=1.0.9">
 </head>
 <body>
   <header class="topbar">
@@ -152,17 +152,20 @@
         <div id="sliders" class="sliders"></div>
         <div class="curve-block">
           <div class="curve-head">
-            <span class="curve-title">曲线</span>
-            <div class="curve-tabs" role="group" aria-label="曲线通道">
-              <button type="button" class="curve-tab is-active" data-ch="rgb">RGB</button>
-              <button type="button" class="curve-tab" data-ch="r">R</button>
-              <button type="button" class="curve-tab" data-ch="g">G</button>
-              <button type="button" class="curve-tab" data-ch="b">B</button>
-            </div>
-            <button id="btn-curve-reset" class="ghost-btn mini" type="button" disabled>复位</button>
+            <select id="curve-channel" class="curve-select" aria-label="曲线通道">
+              <option value="rgb">RGB</option>
+              <option value="r">红</option>
+              <option value="g">绿</option>
+              <option value="b">蓝</option>
+            </select>
+            <button id="btn-curve-reset" class="curve-auto" type="button" disabled>复位</button>
           </div>
-          <canvas id="curve-canvas" class="curve-canvas" width="240" height="240" aria-label="曲线调节：点击曲线添加控制点，拖动调整，双击控制点删除"></canvas>
-          <p class="curve-note">点击曲线添加控制点，拖动调整，双击删除</p>
+          <canvas id="curve-canvas" class="curve-canvas" width="240" height="252" aria-label="曲线调节：点击曲线添加控制点，拖动调整，双击控制点删除"></canvas>
+          <div class="curve-io">
+            <span>输入 <b id="curve-in">—</b></span>
+            <span>输出 <b id="curve-out">—</b></span>
+          </div>
+          <p class="curve-note">点击加点 · 拖动调整 · 双击删除</p>
         </div>
         <div class="card-actions params-actions">
           <button id="btn-export-params" class="ghost-btn" disabled>导出参数</button>
@@ -217,6 +220,6 @@
   <script src="lib/pako.min.js"></script>
   <script src="lib/UTIF.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script src="app.js?v=1.0.9"></script>
+  <script src="app.js?v=1.1.0"></script>
 </body>
 </html>
