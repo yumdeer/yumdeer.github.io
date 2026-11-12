@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="负片校正工具：自动识别片基色，在本地把扫描负片还原为正片，支持多图队列、滑块对比、参数导入导出与批量 ZIP 导出。图片不上传服务器。">
   <title>负片校正 - flowerdeer 小工具</title>
-  <link rel="stylesheet" href="styles.css?v=1.0.10">
+  <link rel="stylesheet" href="styles.css?v=1.0.11">
 </head>
 <body>
   <header class="topbar">
@@ -67,7 +67,6 @@
     </aside>
     <section class="stage">
       <div class="stage-bar">
-        <span id="status" class="status">等待载入图片</span>
         <span class="stage-actions">
           <button id="btn-compare" class="ghost-btn" disabled>按住查看原片</button>
           <button id="btn-compare-split" class="ghost-btn" disabled>对比模式</button>
@@ -140,6 +139,9 @@
         <span class="crop-tip">拖动四角调整范围，框内可整体移动</span>
       </div>
       <div id="queue-bar" class="queue-bar" hidden></div>
+      <div class="stage-status">
+        <span id="status" class="status">等待载入图片</span>
+      </div>
     </section>
 
     <aside class="panel side-panel">
