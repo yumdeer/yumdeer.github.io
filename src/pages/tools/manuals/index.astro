@@ -1,0 +1,212 @@
+---
+// /tools/manuals — 手册下载（列表来自 D1，PDF 存 R2）
+import Layout from '../../../layouts/Layout.astro';
+import { site } from '../../../config';
+import { getDB } from '../../../lib/db';
+import { listHandbooks, type Handbook } from '../../../lib/handbooks';
+
+let items: Handbook[] = [];
+try {
+  items = await listHandbooks(getDB());
+} catch {
+  // 数据库尚未就绪时展示空列表
+}
+
+const fmtSize = (n: number) =>
+  n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+const fmtDate = (s: string) => (s || '').slice(0, 10);
+---
+
+<Layout title="手册下载" description={`相机与摄影手册下载 · ${site.nameZh}`} activePath="/tools/">
+  <div class="manuals-page">
+    <h1>MANUALS</h1>
+    <p class="manuals-intro">整理的一些相机与摄影手册，点右侧下载 PDF。持续补充中。</p>
+
+    <input
+      class="manuals-search"
+      id="manuals-search"
+      type="search"
+      placeholder="搜索标题或说明…"
+      autocomplete="off"
+      aria-label="搜索手册"
+    />
+
+    <ul class="manuals-list" id="manuals-list">
+      {items.map((m) => (
+        <li class="manual-item" data-key={`${m.title} ${m.description}`.toLowerCase()}>
+          <div class="manual-main">
+            <span class="manual-name">{m.title}</span>
+            {m.description && <span class="manual-desc">{m.description}</span>}
+          </div>
+          <div class="manual-meta">
+            <span class="manual-size">{fmtSize(m.size)}</span>
+            <span class="manual-date">{fmtDate(m.created_at)}</span>
+            <a class="manual-dl" href={`/api/handbooks/${m.id}/download`}>
+              下载 <span aria-hidden="true">↓</span>
+            </a>
+          </div>
+        </li>
+      ))}
+    </ul>
+
+    <p class="manuals-empty" id="manuals-empty" hidden>没有匹配的手册。</p>
+    {items.length === 0 && <p class="manuals-empty">还没有手册，稍后再来看看。</p>}
+
+    <p class="manuals-back"><a href="/tools/">← 返回小工具</a></p>
+  </div>
+</Layout>
+
+<style>
+  .manuals-page {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 60px 24px 100px;
+  }
+
+  .manuals-page h1 {
+    font-size: 16px;
+    font-weight: normal;
+    letter-spacing: 0.5px;
+    margin-bottom: 16px;
+  }
+
+  .manuals-intro {
+    font-size: 14px;
+    line-height: 1.9;
+    color: var(--ink-soft);
+    margin-bottom: 24px;
+  }
+
+  .manuals-search {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 9px 12px;
+    margin-bottom: 8px;
+    font-size: 13px;
+    color: inherit;
+    background: transparent;
+    border: 1px solid rgba(128, 128, 128, 0.28);
+    border-radius: 2px;
+    outline: none;
+  }
+
+  .manuals-search:focus {
+    border-color: rgba(192, 57, 43, 0.55);
+  }
+
+  .manuals-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .manual-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    padding: 18px 4px;
+    border-bottom: 1px solid rgba(128, 128, 128, 0.18);
+  }
+
+  .manual-main {
+    min-width: 0;
+  }
+
+  .manual-name {
+    display: block;
+    font-size: 15px;
+    line-height: 1.5;
+  }
+
+  .manual-desc {
+    display: block;
+    margin-top: 5px;
+    font-size: 12px;
+    line-height: 1.7;
+    color: var(--ink-soft);
+  }
+
+  .manual-meta {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-shrink: 0;
+    font-size: 12px;
+    color: var(--ink-soft);
+  }
+
+  .manual-date {
+    font-variant-numeric: tabular-nums;
+    opacity: 0.7;
+  }
+
+  .manual-dl {
+    padding: 5px 12px;
+    font-size: 12px;
+    color: #c0392b;
+    border: 1px solid rgba(192, 57, 43, 0.4);
+    border-radius: 2px;
+    transition: background 0.2s, color 0.2s;
+  }
+
+  .manual-dl:hover {
+    color: #fff;
+    background: #c0392b;
+    text-decoration: none;
+  }
+
+  .manuals-empty {
+    padding: 40px 0;
+    font-size: 13px;
+    color: var(--ink-soft);
+    text-align: center;
+  }
+
+  .manuals-back {
+    margin-top: 44px;
+    font-size: 13px;
+  }
+
+  :global(.theme-dark) .manual-dl {
+    color: #e08a7e;
+    border-color: rgba(224, 138, 126, 0.4);
+  }
+
+  :global(.theme-dark) .manual-dl:hover {
+    color: #111;
+    background: #e08a7e;
+  }
+
+  @media (max-width: 560px) {
+    .manual-item {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 10px;
+    }
+
+    .manual-meta {
+      width: 100%;
+    }
+
+    .manual-dl {
+      margin-left: auto;
+    }
+  }
+</style>
+
+<script>
+  const input = document.getElementById('manuals-search') as HTMLInputElement | null;
+  const list = document.getElementById('manuals-list');
+  const empty = document.getElementById('manuals-empty');
+  input?.addEventListener('input', () => {
+    const q = input.value.trim().toLowerCase();
+    let shown = 0;
+    list?.querySelectorAll<HTMLElement>('.manual-item').forEach((li) => {
+      const hit = !q || (li.dataset.key ?? '').includes(q);
+      li.hidden = !hit;
+      if (hit) shown++;
+    });
+    if (empty) empty.hidden = shown > 0 || !list || list.children.length === 0;
+  });
+</script>

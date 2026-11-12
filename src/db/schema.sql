@@ -81,3 +81,18 @@ CREATE TABLE IF NOT EXISTS tracks (
   sort_order   INTEGER NOT NULL DEFAULT 0,
   created_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- 手册（PDF）元数据：文件本体存 R2（key 形如 docs/xxx.pdf），本表只存索引与统计。
+-- 首次访问时 lib/handbooks.ts 也会幂等建表，线上无需手动迁移。
+CREATE TABLE IF NOT EXISTS handbooks (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  title       TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  r2_key      TEXT NOT NULL UNIQUE,
+  file_name   TEXT NOT NULL,
+  size        INTEGER NOT NULL DEFAULT 0,
+  sort_order  INTEGER NOT NULL DEFAULT 0,
+  downloads   INTEGER NOT NULL DEFAULT 0,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_handbooks_sort ON handbooks(sort_order);

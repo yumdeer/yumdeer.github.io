@@ -1,0 +1,177 @@
+---
+// /admin/manuals — 手册管理：上传 PDF / 排序 / 改名 / 删除
+import AdminLayout from '../../layouts/AdminLayout.astro';
+import { getDB } from '../../lib/db';
+import { listHandbooks, type Handbook } from '../../lib/handbooks';
+
+let items: Handbook[] = [];
+let dbError = '';
+try {
+  items = await listHandbooks(getDB());
+} catch (e) {
+  dbError = e instanceof Error ? e.message : String(e);
+}
+
+const fmtSize = (n: number) =>
+  n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+---
+
+<AdminLayout title="手册">
+  <h1>手册</h1>
+  <p class="admin-hint">
+    上传 PDF 手册，访客在 <a href="/tools/manuals/" target="_blank">/tools/manuals/</a> 浏览与下载。单个文件上限 90MB，可一次选择多个文件。
+  </p>
+  {dbError && <p class="admin-msg">数据库未就绪：{dbError}</p>}
+
+  <form class="admin-form" id="manual-form">
+    <label class="admin-file-label">
+      <input type="file" id="manual-input" accept="application/pdf,.pdf" multiple />
+      选择 PDF 文件（可多选）
+    </label>
+    <div class="admin-row-form">
+      <label>说明（可选，本次上传共用） <input name="description" placeholder="例如：Rolleiflex 3.5F 原厂宣传册" /></label>
+    </div>
+    <div class="admin-progress" id="manual-progress" hidden>
+      <div class="admin-progress-bar"><div class="admin-progress-fill" style="width:0%"></div></div>
+    </div>
+    <button type="submit" id="manual-btn">上传</button>
+  </form>
+
+  <table class="admin-table" id="manual-table">
+    <thead>
+      <tr><th>标题</th><th>大小</th><th>下载</th><th>操作</th></tr>
+    </thead>
+    <tbody>
+      {items.map((m, i) => (
+        <tr data-id={m.id} data-sort={m.sort_order}>
+          <td>
+            {m.title}
+            {m.description && <div class="a-meta">{m.description}</div>}
+          </td>
+          <td>{fmtSize(m.size)}</td>
+          <td>{m.downloads}</td>
+          <td class="admin-actions">
+            <a class="btn-default" href={`/api/handbooks/${m.id}/download`}>下载</a>
+            <button class="btn-move btn-up" type="button" disabled={i === 0} title="上移">↑</button>
+            <button class="btn-move btn-down" type="button" disabled={i === items.length - 1} title="下移">↓</button>
+            <button class="btn-default btn-edit" type="button">改名</button>
+            <button class="btn-danger btn-del" type="button">删除</button>
+          </td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+  {items.length === 0 && <p class="admin-hint">还没有手册，先在上方选择 PDF 上传。</p>}
+</AdminLayout>
+
+<script>
+  const readAsDataURL = (file: File) =>
+    new Promise<string>((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result));
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(file);
+    });
+
+  document.getElementById('manual-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target as HTMLFormElement;
+    const input = document.getElementById('manual-input') as HTMLInputElement;
+    const files = Array.from(input.files ?? []);
+    if (!files.length) return alert('先选择 PDF 文件');
+
+    const description = (form.elements.namedItem('description') as HTMLInputElement).value.trim();
+    const btn = document.getElementById('manual-btn') as HTMLButtonElement;
+    const progress = document.getElementById('manual-progress') as HTMLElement;
+    const fill = progress.querySelector('.admin-progress-fill') as HTMLElement;
+
+    btn.disabled = true;
+    input.disabled = true;
+    progress.hidden = false;
+
+    const tooBig = files.filter((f) => f.size > 90 * 1024 * 1024);
+    if (tooBig.length) {
+      alert(`以下文件超过 90MB，已跳过：\n${tooBig.map((f) => f.name).join('\n')}`);
+    }
+    const todo = files.filter((f) => f.size <= 90 * 1024 * 1024);
+
+    for (let i = 0; i < todo.length; i++) {
+      const file = todo[i];
+      const title = file.name.replace(/\.[^.]+$/, '');
+      progress.title = `正在上传 ${file.name}`;
+      fill.style.width = '0%';
+
+      try {
+        const b64 = await readAsDataURL(file);
+        await new Promise<void>((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open('POST', '/api/admin/handbooks');
+          xhr.setRequestHeader('content-type', 'application/json');
+          xhr.upload.onprogress = (ev) => {
+            if (!ev.lengthComputable) return;
+            const pct = (ev.loaded / ev.total) * 100;
+            const overall = ((i + ev.loaded / ev.total) / todo.length) * 100;
+            fill.style.width = `${overall.toFixed(1)}%`;
+            progress.dataset.label = `${i + 1}/${todo.length} ${file.name} ${pct.toFixed(0)}%`;
+          };
+          xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) resolve();
+            else reject(new Error(xhr.responseText || `HTTP ${xhr.status}`));
+          };
+          xhr.onerror = () => reject(new Error('网络错误'));
+          xhr.send(JSON.stringify({ title, description, name: file.name, b64 }));
+        });
+      } catch (err) {
+        alert(`上传失败：${file.name}\n${err instanceof Error ? err.message : err}`);
+      }
+    }
+
+    location.reload();
+  });
+
+  const postJSON = (method: string, body: unknown) =>
+    fetch('/api/admin/handbooks', {
+      method,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  document.getElementById('manual-table')?.addEventListener('click', async (e) => {
+    const tr = (e.target as HTMLElement).closest('tr');
+    if (!tr) return;
+    const id = Number(tr.dataset.id);
+    const rows = Array.from(document.querySelectorAll('#manual-table tbody tr'));
+    const i = rows.indexOf(tr);
+
+    if ((e.target as HTMLElement).classList.contains('btn-del')) {
+      if (!confirm('删除这本手册？文件会一并删除。')) return;
+      await fetch(`/api/admin/handbooks?id=${id}`, { method: 'DELETE' });
+      location.reload();
+      return;
+    }
+
+    if ((e.target as HTMLElement).classList.contains('btn-edit')) {
+      const old = tr.querySelector('td')?.childNodes[0]?.textContent?.trim() ?? '';
+      const title = prompt('新的标题', old);
+      if (!title || title === old) return;
+      await postJSON('PUT', { id, title });
+      location.reload();
+      return;
+    }
+
+    const up = (e.target as HTMLElement).classList.contains('btn-up');
+    const down = (e.target as HTMLElement).classList.contains('btn-down');
+    if (!up && !down) return;
+
+    const j = up ? i - 1 : i + 1;
+    if (j < 0 || j >= rows.length) return;
+    const a = Number(rows[i].dataset.sort);
+    const b = Number(rows[j].dataset.sort);
+
+    await Promise.all([
+      postJSON('PUT', { id: Number(rows[i].dataset.id), sort_order: a === b ? j : b }),
+      postJSON('PUT', { id: Number(rows[j].dataset.id), sort_order: a === b ? i : a }),
+    ]);
+    location.reload();
+  });
+</script>
