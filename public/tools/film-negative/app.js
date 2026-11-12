@@ -418,6 +418,27 @@
   var CURVE_TOTAL = CURVE_SIZE + CURVE_STRIP;
   var curveSelected = -1;
 
+  function curveChannelColor(ch) {
+    if (ch === "r") return "#ff5f5f";
+    if (ch === "g") return "#4ddc7a";
+    if (ch === "b") return "#5a9bff";
+    return "#f2f2f2";
+  }
+
+  function curveChannelFill(ch) {
+    if (ch === "r") return "rgba(255,95,95,0.72)";
+    if (ch === "g") return "rgba(77,220,122,0.72)";
+    if (ch === "b") return "rgba(90,155,255,0.72)";
+    return "rgba(228,228,228,0.72)";
+  }
+
+  function curveChannelBg(ch) {
+    if (ch === "r") return "#4a3a3a";
+    if (ch === "g") return "#38483a";
+    if (ch === "b") return "#383d4a";
+    return "#4b4b4b";
+  }
+
   function curveHistFor(state, ch) {
     var h = state.curveHist;
     if (!h) return null;
@@ -442,26 +463,45 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, CURVE_SIZE, CURVE_TOTAL);
 
-    // 背景：Photoshop 曲线面板深灰
-    ctx.fillStyle = "#4b4b4b";
+    // 背景：Photoshop 曲线面板深灰，单通道带轻微同色倾向
+    ctx.fillStyle = curveChannelBg(state.curveChannel);
     ctx.fillRect(0, 0, CURVE_SIZE, CURVE_SIZE);
 
     // 直方图（位于曲线下方）
     var hist = curveHistFor(state, state.curveChannel);
     if (hist) {
-      var max = 0, i0;
-      for (i0 = 0; i0 < 256; i0++) if (hist[i0] > max) max = hist[i0];
-      if (max > 0) {
+      // 用 97% 分位作为参考高度，避免片基/边框的巨大单一峰值把其余柱压扁
+      var vals = [], i0;
+      for (i0 = 0; i0 < 256; i0++) if (hist[i0] > 0) vals.push(hist[i0]);
+      vals.sort(function (a, b) { return a - b; });
+      var ref = vals.length ? vals[Math.floor((vals.length - 1) * 0.97)] : 0;
+      if (ref > 0) {
+        var heights = new Array(256);
+        for (i0 = 0; i0 < 256; i0++) {
+          var ratio = Math.min(1, hist[i0] / ref);
+          heights[i0] = Math.pow(ratio, 0.85) * (CURVE_SIZE - 2);
+        }
         ctx.beginPath();
         ctx.moveTo(0, CURVE_SIZE);
         for (i0 = 0; i0 < 256; i0++) {
-          var hh = (hist[i0] / max) * (CURVE_SIZE - 3);
-          ctx.lineTo((i0 / 255) * CURVE_SIZE, CURVE_SIZE - hh);
+          ctx.lineTo((i0 / 255) * CURVE_SIZE, CURVE_SIZE - heights[i0]);
         }
         ctx.lineTo(CURVE_SIZE, CURVE_SIZE);
         ctx.closePath();
-        ctx.fillStyle = "rgba(178,178,178,0.55)";
+        ctx.fillStyle = curveChannelFill(state.curveChannel);
         ctx.fill();
+        // 顶边描线，让柱形轮廓更清晰
+        ctx.beginPath();
+        for (i0 = 0; i0 < 256; i0++) {
+          var lx = (i0 / 255) * CURVE_SIZE;
+          var ly = CURVE_SIZE - heights[i0];
+          if (i0 === 0) ctx.moveTo(lx, ly); else ctx.lineTo(lx, ly);
+        }
+        ctx.strokeStyle = curveChannelColor(state.curveChannel);
+        ctx.globalAlpha = 0.9;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.globalAlpha = 1;
       }
     }
 
@@ -485,10 +525,10 @@
     ctx.strokeStyle = "#2b2b2b";
     ctx.strokeRect(0.5, 0.5, CURVE_SIZE - 1, CURVE_SIZE - 1);
 
-    // 曲线（Photoshop 中恒为白色）
+    // 曲线：RGB 复合为白色，单通道用对应通道色
     var pts = state.curve[state.curveChannel] || defaultCurvePoints();
     var lut = buildCurveLut(pts);
-    ctx.strokeStyle = "#f2f2f2";
+    ctx.strokeStyle = curveChannelColor(state.curveChannel);
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     for (var k = 0; k < 256; k++) {
@@ -505,7 +545,7 @@
       var half = (i === curveDragIndex || i === curveSelected) ? 4.5 : 3.5;
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(sx - half, sy - half, half * 2, half * 2);
-      ctx.strokeStyle = "#2b2b2b";
+      ctx.strokeStyle = curveChannelColor(state.curveChannel);
       ctx.lineWidth = 1;
       ctx.strokeRect(sx - half + 0.5, sy - half + 0.5, half * 2 - 1, half * 2 - 1);
     }
