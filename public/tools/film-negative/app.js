@@ -315,7 +315,267 @@
   }
 
   // 主渲染：src -> dst（均为 ImageData.data）
-  function render(src, dst, base, adj, analysis) {
+  // ---------- 曲线（Photoshop 风格）----------
+  var CURVE_SIZE = 240;
+  var CURVE_CHANNELS = ["rgb", "r", "g", "b"];
+  var curveCtx = null;
+  var curveDragIndex = -1;
+
+  function defaultCurvePoints() { return [{ x: 0, y: 0 }, { x: 1, y: 1 }]; }
+
+  function defaultCurve() {
+    return {
+      rgb: defaultCurvePoints(),
+      r: defaultCurvePoints(),
+      g: defaultCurvePoints(),
+      b: defaultCurvePoints(),
+    };
+  }
+
+  function copyCurve(c) {
+    var src = c || {};
+    var out = {};
+    CURVE_CHANNELS.forEach(function (ch) {
+      var pts = Array.isArray(src[ch]) ? src[ch] : null;
+      if (pts && pts.length >= 2) {
+        out[ch] = pts.map(function (p) {
+          return { x: clamp(Number(p.x) || 0, 0, 1), y: clamp(Number(p.y) || 0, 0, 1) };
+        }).sort(function (a, b) { return a.x - b.x; });
+      } else {
+        out[ch] = defaultCurvePoints();
+      }
+    });
+    return out;
+  }
+
+  function curveIsDefault(c) {
+    if (!c) return true;
+    for (var i = 0; i < CURVE_CHANNELS.length; i++) {
+      var pts = c[CURVE_CHANNELS[i]];
+      if (!pts || pts.length !== 2) return false;
+      if (Math.abs(pts[0].x) > 0.001 || Math.abs(pts[0].y) > 0.001) return false;
+      if (Math.abs(pts[1].x - 1) > 0.001 || Math.abs(pts[1].y - 1) > 0.001) return false;
+    }
+    return true;
+  }
+
+  // 单调三次插值（Fritsch–Carlson），保证曲线不过冲、不抖动
+  function buildCurveLut(points) {
+    var lut = new Uint8Array(256);
+    var pts = (points || []).slice().sort(function (a, b) { return a.x - b.x; });
+    var n = pts.length;
+    if (n < 2) {
+      for (var q = 0; q < 256; q++) lut[q] = q;
+      return lut;
+    }
+    var xs = [], ys = [], i;
+    for (i = 0; i < n; i++) { xs.push(pts[i].x); ys.push(pts[i].y); }
+    var d = [], m = [];
+    for (i = 0; i < n - 1; i++) d.push((ys[i + 1] - ys[i]) / Math.max(1e-6, xs[i + 1] - xs[i]));
+    m[0] = d[0];
+    m[n - 1] = d[n - 2];
+    for (i = 1; i < n - 1; i++) m[i] = d[i - 1] * d[i] <= 0 ? 0 : (d[i - 1] + d[i]) / 2;
+    for (i = 0; i < n - 1; i++) {
+      if (d[i] === 0) { m[i] = 0; m[i + 1] = 0; continue; }
+      var a = m[i] / d[i], b = m[i + 1] / d[i];
+      var s2 = a * a + b * b;
+      if (s2 > 9) {
+        var t = 3 / Math.sqrt(s2);
+        m[i] = t * a * d[i];
+        m[i + 1] = t * b * d[i];
+      }
+    }
+    var seg = 0;
+    for (var k = 0; k < 256; k++) {
+      var x = k / 255;
+      if (x <= xs[0]) { lut[k] = roundClamp(clamp(ys[0], 0, 1) * 255); continue; }
+      if (x >= xs[n - 1]) { lut[k] = roundClamp(clamp(ys[n - 1], 0, 1) * 255); continue; }
+      while (seg < n - 2 && x > xs[seg + 1]) seg++;
+      var h = Math.max(1e-6, xs[seg + 1] - xs[seg]);
+      var tt = (x - xs[seg]) / h;
+      var t2 = tt * tt, t3 = t2 * tt;
+      var y = (2 * t3 - 3 * t2 + 1) * ys[seg]
+        + (t3 - 2 * t2 + tt) * h * m[seg]
+        + (-2 * t3 + 3 * t2) * ys[seg + 1]
+        + (t3 - t2) * h * m[seg + 1];
+      lut[k] = roundClamp(clamp(y, 0, 1) * 255);
+    }
+    return lut;
+  }
+
+  function buildCurveLuts(c) {
+    var curve = copyCurve(c);
+    return {
+      rgb: buildCurveLut(curve.rgb),
+      r: buildCurveLut(curve.r),
+      g: buildCurveLut(curve.g),
+      b: buildCurveLut(curve.b),
+    };
+  }
+
+  function curveChannelColor(ch) {
+    if (ch === "r") return "#c0392b";
+    if (ch === "g") return "#1f8f52";
+    if (ch === "b") return "#2d6cd6";
+    return "#1c1b18";
+  }
+
+  function drawCurve() {
+    if (!el.curveCanvas || !state.curve) return;
+    var cnv = el.curveCanvas;
+    if (!curveCtx) curveCtx = cnv.getContext("2d");
+    var dpr = window.devicePixelRatio || 1;
+    var px = Math.round(CURVE_SIZE * dpr);
+    if (cnv.width !== px) {
+      cnv.width = px;
+      cnv.height = px;
+    }
+    var ctx = curveCtx;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, CURVE_SIZE, CURVE_SIZE);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, CURVE_SIZE, CURVE_SIZE);
+    ctx.strokeStyle = "rgba(0,0,0,0.10)";
+    ctx.lineWidth = 1;
+    for (var g = 1; g < 4; g++) {
+      var gp = Math.round((CURVE_SIZE * g) / 4) + 0.5;
+      ctx.beginPath(); ctx.moveTo(gp, 0); ctx.lineTo(gp, CURVE_SIZE); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, gp); ctx.lineTo(CURVE_SIZE, gp); ctx.stroke();
+    }
+    ctx.strokeStyle = "rgba(0,0,0,0.18)";
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(0, CURVE_SIZE); ctx.lineTo(CURVE_SIZE, 0); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.strokeStyle = "rgba(0,0,0,0.25)";
+    ctx.strokeRect(0.5, 0.5, CURVE_SIZE - 1, CURVE_SIZE - 1);
+    var pts = state.curve[state.curveChannel] || defaultCurvePoints();
+    var lut = buildCurveLut(pts);
+    ctx.strokeStyle = curveChannelColor(state.curveChannel);
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (var k = 0; k < 256; k++) {
+      var cx = (k / 255) * CURVE_SIZE;
+      var cy = (1 - lut[k] / 255) * CURVE_SIZE;
+      if (k === 0) ctx.moveTo(cx, cy); else ctx.lineTo(cx, cy);
+    }
+    ctx.stroke();
+    for (var i = 0; i < pts.length; i++) {
+      var sx = pts[i].x * CURVE_SIZE;
+      var sy = (1 - pts[i].y) * CURVE_SIZE;
+      ctx.beginPath();
+      ctx.arc(sx, sy, i === curveDragIndex ? 6 : 4.5, 0, Math.PI * 2);
+      ctx.fillStyle = "#ffffff";
+      ctx.fill();
+      ctx.strokeStyle = curveChannelColor(state.curveChannel);
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+  }
+
+  function curvePosOf(e) {
+    var r = el.curveCanvas.getBoundingClientRect();
+    return {
+      x: clamp((e.clientX - r.left) / Math.max(1, r.width), 0, 1),
+      y: clamp(1 - (e.clientY - r.top) / Math.max(1, r.height), 0, 1),
+    };
+  }
+
+  function findCurvePoint(pts, x, y) {
+    var best = -1, bestD = 12 / CURVE_SIZE;
+    for (var i = 0; i < pts.length; i++) {
+      var d = Math.sqrt(Math.pow(pts[i].x - x, 2) + Math.pow(pts[i].y - y, 2));
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    return best;
+  }
+
+  function commitCurveChange() {
+    markEdited();
+    scheduleRender();
+  }
+
+  function initCurveEditor() {
+    if (!el.curveCanvas) return;
+    var cnv = el.curveCanvas;
+    cnv.addEventListener("pointerdown", function (e) {
+      if (!state.previewData) return;
+      e.preventDefault();
+      var pts = state.curve[state.curveChannel];
+      var p = curvePosOf(e);
+      var idx = findCurvePoint(pts, p.x, p.y);
+      if (idx < 0) {
+        var np = { x: p.x, y: p.y };
+        pts.push(np);
+        pts.sort(function (a, b) { return a.x - b.x; });
+        idx = pts.indexOf(np);
+      }
+      curveDragIndex = idx;
+      try { cnv.setPointerCapture(e.pointerId); } catch (err) { /* 忽略 */ }
+      drawCurve();
+    });
+    cnv.addEventListener("pointermove", function (e) {
+      if (curveDragIndex < 0 || !state.previewData) return;
+      e.preventDefault();
+      var pts = state.curve[state.curveChannel];
+      if (!pts || pointsLengthGuard(pts)) return;
+      var p = curvePosOf(e);
+      var i = curveDragIndex;
+      if (i === 0 || i === pts.length - 1) {
+        pts[i].y = p.y; // 端点只允许上下移动
+      } else {
+        pts[i].x = clamp(p.x, pts[i - 1].x + 0.02, pts[i + 1].x - 0.02);
+        pts[i].y = p.y;
+      }
+      drawCurve();
+      commitCurveChange();
+    });
+    function pointsLengthGuard(pts) { return pts.length < 2; }
+    ["pointerup", "pointercancel"].forEach(function (ev) {
+      cnv.addEventListener(ev, function (e) {
+        if (curveDragIndex < 0) return;
+        curveDragIndex = -1;
+        try { cnv.releasePointerCapture(e.pointerId); } catch (err) { /* 忽略 */ }
+        drawCurve();
+        commitCurveChange();
+      });
+    });
+    cnv.addEventListener("dblclick", function (e) {
+      if (!state.previewData) return;
+      var pts = state.curve[state.curveChannel];
+      var p = curvePosOf(e);
+      var idx = findCurvePoint(pts, p.x, p.y);
+      if (idx > 0 && idx < pts.length - 1) {
+        pts.splice(idx, 1);
+        drawCurve();
+        commitCurveChange();
+        setStatus("已删除曲线控制点。");
+      }
+    });
+    var tabs = document.querySelectorAll(".curve-tab");
+    for (var i = 0; i < tabs.length; i++) {
+      tabs[i].addEventListener("click", function () {
+        var ch = this.getAttribute("data-ch");
+        if (!ch || ch === state.curveChannel) return;
+        state.curveChannel = ch;
+        for (var j = 0; j < tabs.length; j++) {
+          tabs[j].classList.toggle("is-active", tabs[j] === this);
+        }
+        drawCurve();
+      });
+    }
+    if (el.btnCurveReset) {
+      el.btnCurveReset.addEventListener("click", function () {
+        if (!state.previewData) return;
+        state.curve[state.curveChannel] = defaultCurvePoints();
+        drawCurve();
+        commitCurveChange();
+        setStatus("已把 " + (state.curveChannel === "rgb" ? "RGB 复合" : state.curveChannel.toUpperCase() + " 通道") + "曲线复位。");
+      });
+    }
+    drawCurve();
+  }
+
+  function render(src, dst, base, adj, analysis, curveLuts) {
     var levels = analysis.levels;
     var gains = analysis.gains;
     var positive = !!analysis.positive;
@@ -346,9 +606,18 @@
       }
       applySaturation(rgb[0], rgb[1], rgb[2], sat, tmp);
       applyContrast(tmp[0], tmp[1], tmp[2], adj.contrast, tmp);
-      dst[i] = linearToSrgb(tmp[0]);
-      dst[i + 1] = linearToSrgb(tmp[1]);
-      dst[i + 2] = linearToSrgb(tmp[2]);
+      var r8 = linearToSrgb(tmp[0]);
+      var g8 = linearToSrgb(tmp[1]);
+      var b8 = linearToSrgb(tmp[2]);
+      if (curveLuts) {
+        // 先逐通道曲线，再叠加 RGB 复合曲线（与 Photoshop 一致）
+        r8 = curveLuts.rgb[curveLuts.r[r8]];
+        g8 = curveLuts.rgb[curveLuts.g[g8]];
+        b8 = curveLuts.rgb[curveLuts.b[b8]];
+      }
+      dst[i] = r8;
+      dst[i + 1] = g8;
+      dst[i + 2] = b8;
       dst[i + 3] = src[i + 3];
     }
   }
@@ -410,6 +679,8 @@
     detectedPositive: false, // 自动判断疑似正片
     toneIgnored: false,  // 用户忽略了正片提示
     renderBuf: null,     // 预览渲染缓存（完整预览尺寸）
+    curve: defaultCurve(),   // 曲线控制点 {rgb,r,g,b}
+    curveChannel: "rgb",     // 当前编辑的曲线通道
   };
 
   var el = {
@@ -440,6 +711,8 @@
     btnExportParams: document.getElementById("btn-export-params"),
     btnImportParams: document.getElementById("btn-import-params"),
     btnResetAdj: document.getElementById("btn-reset-adj"),
+    curveCanvas: document.getElementById("curve-canvas"),
+    btnCurveReset: document.getElementById("btn-curve-reset"),
     paramsInput: document.getElementById("params-input"),
     compareOverlay: document.getElementById("compare-overlay"),
     compareBefore: document.getElementById("compare-before"),
@@ -688,7 +961,7 @@
     if (!state.previewData || state.showingOriginal) return;
     state.rendering = true;
     ensureRenderBuf();
-    render(state.previewData.data, state.renderBuf.data, state.base, state.adj, state.analysis);
+    render(state.previewData.data, state.renderBuf.data, state.base, state.adj, state.analysis, buildCurveLuts(state.curve));
     blitPreview(state.renderBuf);
     state.rendering = false;
     if (state.pendingRender) {
@@ -743,7 +1016,7 @@
   function markEdited() {
     var cur = currentItem();
     if (!cur) return;
-    var v = !adjIsDefault(state.adj) || state.baseSource === "manual" || !!state.crop || state.positive;
+    var v = !adjIsDefault(state.adj) || !curveIsDefault(state.curve) || state.baseSource === "manual" || !!state.crop || state.positive;
     if (cur.edited !== v) {
       cur.edited = v;
       renderQueue();
@@ -755,6 +1028,7 @@
     var cur = currentItem();
     if (!cur || !state.previewData) return;
     cur.adj = copyAdj(state.adj);
+    cur.curve = copyCurve(state.curve);
     cur.base = state.base.slice();
     cur.baseSource = state.baseSource;
     cur.baseConfidence = state.baseConfidence;
@@ -762,7 +1036,7 @@
     cur.opened = true;
     cur.crop = state.crop ? { x: state.crop.x, y: state.crop.y, w: state.crop.w, h: state.crop.h } : null;
     cur.positive = state.positive;
-    cur.edited = !adjIsDefault(state.adj) || state.baseSource === "manual" || !!state.crop || state.positive;
+    cur.edited = !adjIsDefault(state.adj) || !curveIsDefault(state.curve) || state.baseSource === "manual" || !!state.crop || state.positive;
   }
 
   function addFiles(fileList) {
@@ -791,6 +1065,7 @@
         base: null,
         baseSource: null,
         adj: null,
+        curve: null,
         opened: false,
         edited: false,
       };
@@ -885,6 +1160,8 @@
     state.fullH = 0;
     state.analysis = null;
     state.adj = defaultAdjustments();
+    state.curve = defaultCurve();
+    state.curveChannel = "rgb";
     state.base = DEFAULT_BASE.slice();
     state.baseSource = "default";
     state.showingOriginal = false;
@@ -917,7 +1194,7 @@
     el.canvasWrap.hidden = true;
     el.dropZone.hidden = false;
     [el.btnCompare, el.btnCompareSplit, el.btnZoom, el.btnReset, el.btnExport, el.btnAutoBase,
-     el.btnManualBase, el.btnExportParams, el.btnImportParams, el.btnResetAdj, el.btnApplyAdjAll,
+     el.btnManualBase, el.btnExportParams, el.btnImportParams, el.btnResetAdj, el.btnCurveReset, el.btnApplyAdjAll,
      el.btnApplyAdjUnproc, el.btnApplyBaseUnproc, el.btnImportParamsQueue, el.btnApplyBaseAll,
      el.btnEditComp, el.btnResetAll, el.btnExportZip, el.btnCrop, el.btnExportDir].forEach(function (b) {
       if (b) b.disabled = true;
@@ -959,7 +1236,7 @@
       el.dropZone.hidden = true;
       el.canvasWrap.hidden = false;
       [el.btnCompare, el.btnCompareSplit, el.btnZoom, el.btnReset, el.btnExport, el.btnAutoBase,
-       el.btnManualBase, el.btnExportParams, el.btnImportParams, el.btnResetAdj, el.btnCrop].forEach(function (b) {
+       el.btnManualBase, el.btnExportParams, el.btnImportParams, el.btnResetAdj, el.btnCurveReset, el.btnCrop].forEach(function (b) {
         if (b) b.disabled = false;
       });
       if (el.btnExportDir) el.btnExportDir.disabled = !window.showDirectoryPicker;
@@ -970,6 +1247,13 @@
       }
       // 恢复缓存的调色参数，否则用默认值
       state.adj = item.adj ? copyAdj(item.adj) : defaultAdjustments();
+      state.curve = item.curve ? copyCurve(item.curve) : defaultCurve();
+      state.curveChannel = "rgb";
+      var curveTabs = document.querySelectorAll(".curve-tab");
+      for (var ct = 0; ct < curveTabs.length; ct++) {
+        curveTabs[ct].classList.toggle("is-active", curveTabs[ct].getAttribute("data-ch") === "rgb");
+      }
+      drawCurve();
       Object.keys(sliderEls).forEach(function (key) {
         var s = sliderEls[key];
         s.input.value = String(state.adj[key]);
@@ -1186,8 +1470,15 @@
 
   function resetAllAdjustments() {
     resetAdjustments();
+    state.curve = defaultCurve();
+    state.curveChannel = "rgb";
+    var rTabs = document.querySelectorAll(".curve-tab");
+    for (var rt = 0; rt < rTabs.length; rt++) {
+      rTabs[rt].classList.toggle("is-active", rTabs[rt].getAttribute("data-ch") === "rgb");
+    }
+    drawCurve();
     markEdited();
-    setStatus("已把 8 项调色参数恢复为默认值。");
+    setStatus("已把 8 项调色参数与曲线恢复为默认值。");
   }
   el.btnReset.addEventListener("click", resetAllAdjustments);
   if (el.btnResetAdj) el.btnResetAdj.addEventListener("click", resetAllAdjustments);
@@ -1570,7 +1861,7 @@
         ctx.drawImage(state.bitmap, 0, 0, w, h);
         var src = ctx.getImageData(0, 0, w, h);
         var out = ctx.createImageData(w, h);
-        render(src.data, out.data, state.base, state.adj, state.analysis);
+        render(src.data, out.data, state.base, state.adj, state.analysis, buildCurveLuts(state.curve));
         ctx.putImageData(out, 0, 0);
 
         var outCanvas = cnv;
@@ -1705,7 +1996,7 @@
         var src = ctx.getImageData(0, 0, w, h);
         var analysis = state.positive ? analyzePositive() : analyze(src.data, state.base);
         var out = ctx.createImageData(w, h);
-        render(src.data, out.data, state.base, state.adj, analysis);
+        render(src.data, out.data, state.base, state.adj, analysis, buildCurveLuts(state.curve));
         ctx.putImageData(out, 0, 0);
         var shown = cnv;
         var rect = cropRectPx(state.crop, w, h);
@@ -1852,6 +2143,7 @@
       base: [state.base[0], state.base[1], state.base[2]],
       baseSource: state.baseSource,
       adjustments: copyAdj(state.adj),
+      curve: copyCurve(state.curve),
       positive: state.positive,
       crop: state.crop ? { x: state.crop.x, y: state.crop.y, w: state.crop.w, h: state.crop.h } : null,
     };
@@ -1864,7 +2156,7 @@
     a.click();
     a.remove();
     setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
-    setStatus("已导出参数文件（片基色 + 8 项调色参数）。");
+    setStatus("已导出参数文件（片基色 + 8 项调色参数 + 曲线）。");
   });
 
   el.btnImportParams.addEventListener("click", function () { el.paramsInput.click(); });
@@ -1891,9 +2183,11 @@
           ? [roundClamp(obj.base[0]), roundClamp(obj.base[1]), roundClamp(obj.base[2])]
           : null;
         var m = 0;
+        var curveSrc = obj.curve ? copyCurve(obj.curve) : null;
         state.queue.forEach(function (q) {
           q.adj = copyAdj(adjSrc);
-          if (!adjIsDefault(q.adj)) q.edited = true;
+          if (curveSrc) q.curve = copyCurve(curveSrc);
+          if (!adjIsDefault(q.adj) || !curveIsDefault(q.curve)) q.edited = true;
           if (baseSrc) {
             q.base = baseSrc.slice();
             q.baseSource = "sync";
@@ -1918,6 +2212,13 @@
         s.input.value = String(state.adj[k]);
         s.value.textContent = s.spec.fmt(state.adj[k]);
       });
+      state.curve = obj.curve ? copyCurve(obj.curve) : defaultCurve();
+      state.curveChannel = "rgb";
+      var impTabs = document.querySelectorAll(".curve-tab");
+      for (var it = 0; it < impTabs.length; it++) {
+        impTabs[it].classList.toggle("is-active", impTabs[it].getAttribute("data-ch") === "rgb");
+      }
+      drawCurve();
       state.base = [roundClamp(obj.base[0]), roundClamp(obj.base[1]), roundClamp(obj.base[2])];
       state.baseSource = obj.baseSource === "manual" ? "manual" : "sync";
       state.positive = !!obj.positive;
@@ -1929,6 +2230,7 @@
       var pItem = currentItem();
       if (pItem) {
         pItem.positive = state.positive;
+        pItem.curve = copyCurve(state.curve);
         pItem.crop = state.crop ? { x: state.crop.x, y: state.crop.y, w: state.crop.w, h: state.crop.h } : null;
       }
       state.baseConfidence = 0;
@@ -1951,16 +2253,18 @@
   function applyAdjTo(unprocOnly) {
     if (!state.previewData || state.queue.length < 2) return;
     var src = copyAdj(state.adj);
+    var srcCurve = copyCurve(state.curve);
     var n = 0;
     state.queue.forEach(function (q) {
       if (q.id === state.curId) return;
       if (unprocOnly && q.edited) return;
       q.adj = copyAdj(src);
-      if (!adjIsDefault(q.adj)) q.edited = true;
+      q.curve = copyCurve(srcCurve);
+      if (!adjIsDefault(q.adj) || !curveIsDefault(q.curve)) q.edited = true;
       n += 1;
     });
     renderQueue();
-    setStatus("已把当前 8 项调色参数应用到" + (unprocOnly ? "未处理的 " : "其余 ") + n + " 张。");
+    setStatus("已把当前 8 项调色参数与曲线应用到" + (unprocOnly ? "未处理的 " : "其余 ") + n + " 张。");
   }
   function applyBaseTo(unprocOnly) {
     if (!state.previewData || state.queue.length < 2) return;
@@ -1987,6 +2291,7 @@
     if (!state.queue.length || !state.previewData) return;
     state.queue.forEach(function (q) {
       q.adj = null;
+      q.curve = null;
       q.edited = false;
     });
     resetAdjustments();
@@ -2039,7 +2344,7 @@
       ctx.drawImage(bmp, 0, 0, w, h);
       var src = ctx.getImageData(0, 0, w, h);
       var out = ctx.createImageData(w, h);
-      render(src.data, out.data, base, adj, analysis);
+      render(src.data, out.data, base, adj, analysis, buildCurveLuts(item.curve));
       ctx.putImageData(out, 0, 0);
       if (bmp.close) bmp.close();
       var outCanvas = cnv;
@@ -2268,5 +2573,6 @@
   });
 
   buildSliders();
+  initCurveEditor();
   updateBaseUI();
 })();

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="负片校正工具：自动识别片基色，在本地把扫描负片还原为正片，支持多图队列、滑块对比、参数导入导出与批量 ZIP 导出。图片不上传服务器。">
   <title>负片校正 - flowerdeer 小工具</title>
-  <link rel="stylesheet" href="styles.css?v=1.0.7">
+  <link rel="stylesheet" href="styles.css?v=1.0.8">
 </head>
 <body>
   <header class="topbar">
@@ -150,6 +150,20 @@
           <span class="card-note-inline" id="adj-note">双击滑块可复位</span>
         </div>
         <div id="sliders" class="sliders"></div>
+        <div class="curve-block">
+          <div class="curve-head">
+            <span class="curve-title">曲线</span>
+            <div class="curve-tabs" role="group" aria-label="曲线通道">
+              <button type="button" class="curve-tab is-active" data-ch="rgb">RGB</button>
+              <button type="button" class="curve-tab" data-ch="r">R</button>
+              <button type="button" class="curve-tab" data-ch="g">G</button>
+              <button type="button" class="curve-tab" data-ch="b">B</button>
+            </div>
+            <button id="btn-curve-reset" class="ghost-btn mini" type="button" disabled>复位</button>
+          </div>
+          <canvas id="curve-canvas" class="curve-canvas" width="240" height="240" aria-label="曲线调节：点击曲线添加控制点，拖动调整，双击控制点删除"></canvas>
+          <p class="curve-note">点击曲线添加控制点，拖动调整，双击删除</p>
+        </div>
         <div class="card-actions params-actions">
           <button id="btn-export-params" class="ghost-btn" disabled>导出参数</button>
           <button id="btn-import-params" class="ghost-btn" disabled>导入参数</button>
@@ -203,6 +217,6 @@
   <script src="lib/pako.min.js"></script>
   <script src="lib/UTIF.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script src="app.js?v=1.0.8"></script>
+  <script src="app.js?v=1.0.9"></script>
 </body>
 </html>
