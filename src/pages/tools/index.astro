@@ -65,6 +65,11 @@ const tools: Tool[] = [
         </li>
       ))}
     </ul>
+
+    <p class="tools-support">
+      如果这些小工具帮到了你，欢迎
+      <a href="https://afdian.com/a/yumdeer" target="_blank" rel="noopener noreferrer">在爱发电支持我</a>。
+    </p>
   </div>
 
   <div class="donate" data-donate>
@@ -73,7 +78,7 @@ const tools: Tool[] = [
       <p class="donate-title">赞赏支持</p>
       <a
         class="donate-link"
-        href="https://afdian.com/u/ce77d984de4311f18a2952540083324c"
+        href="https://afdian.com/a/yumdeer"
         target="_blank"
         rel="noopener noreferrer"
       >
@@ -109,6 +114,27 @@ const tools: Tool[] = [
     font-weight: normal;
     letter-spacing: 0.5px;
     margin-bottom: 16px;
+  }
+
+  .tools-support {
+    margin-top: 44px;
+    font-size: 13px;
+    line-height: 1.9;
+    color: var(--ink-soft);
+  }
+
+  .tools-support a {
+    color: #c0392b;
+    border-bottom: 1px solid rgba(192, 57, 43, 0.35);
+  }
+
+  :global(.theme-dark) .tools-support {
+    color: #8a8a8a;
+  }
+
+  :global(.theme-dark) .tools-support a {
+    color: #e08a7e;
+    border-bottom-color: rgba(224, 138, 126, 0.4);
   }
 
   .tools-intro {
