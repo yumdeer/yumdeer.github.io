@@ -29,6 +29,12 @@ const tools: Tool[] = [
     desc: '自动识别片基色，把扫描负片在本机还原为正片（兼容黑边整卷扫描条），支持多图排队、滑块对比、裁剪、正负片自动判断、参数导入导出，批量导出可选文件夹直写或分卷 ZIP。',
     tag: 'FILM',
   },
+  {
+    title: '自动曝光 / 白平衡',
+    href: '/tools/auto-tone/',
+    desc: '分析直方图与色阶，自动校正曝光和色温偏色，支持灰度世界、白点、Shades of Gray 与自适应白平衡，内置色彩平衡、色相/饱和度、可选颜色等 Photoshop 风格调色，可手动微调并导出，全部在本地浏览器内完成。',
+    tag: 'COLOR',
+  },
 ];
 ---
 
@@ -47,6 +53,12 @@ const tools: Tool[] = [
                   <path d="M6 3.5h8.5L19 8v12.5H6z" />
                   <path d="M14.5 3.5V8H19" />
                   <path d="M8.8 12h7.4M8.8 15h7.4M8.8 18h4.6" />
+                </svg>
+              ) : tool.tag === 'COLOR' ? (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="8.5" />
+                  <path d="M12 3.5a8.5 8.5 0 0 0 0 17z" fill="currentColor" stroke="none" opacity="0.55" />
+                  <path d="M12 3.5v17" />
                 </svg>
               ) : tool.tag === 'FILM' && tool.href.includes('negative') ? (
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
