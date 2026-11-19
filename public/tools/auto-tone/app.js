@@ -146,8 +146,8 @@
     return [mg / mr, 1, mg / mb];
   }
 
-  function estimateWhiteBalance(a) {
-    const s = state.settings;
+  function estimateWhiteBalance(a, st) {
+    const s = st || state.settings;
     if (!s.wbEnabled) return [1, 1, 1];
 
     const { data, w, h } = a;
@@ -229,8 +229,8 @@
 
   /* ---------- 自动曝光 / 色阶估计 ---------- */
 
-  function estimateExposure(a, gains) {
-    const s = state.settings;
+  function estimateExposure(a, gains, st) {
+    const s = st || state.settings;
     if (!s.expEnabled) return 1;
     const { data, w, h } = a;
     const step = sampleStep(w, h, 220000);
@@ -255,8 +255,8 @@
     return Math.min(medGain, capGain);
   }
 
-  function estimateLevels(a, gains, expGain) {
-    const s = state.settings;
+  function estimateLevels(a, gains, expGain, st) {
+    const s = st || state.settings;
     const { data, w, h } = a;
     const step = sampleStep(w, h, 220000);
     const hist = new Uint32Array(256);
@@ -706,6 +706,20 @@
     state.beforeMedian = percentileFromHist(luma.hist, luma.total, 50) / 255;
   }
 
+  /* 为任意图片生成分析数据，不修改当前编辑状态 */
+  function analyzeSource(src, w, h) {
+    const scale = Math.min(1, 720 / Math.max(w, h));
+    const aw = Math.max(1, Math.round(w * scale));
+    const ah = Math.max(1, Math.round(h * scale));
+    const c = document.createElement('canvas');
+    c.width = aw;
+    c.height = ah;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(src, 0, 0, aw, ah);
+    const img = ctx.getImageData(0, 0, aw, ah);
+    return { w: aw, h: ah, data: img.data };
+  }
+
   function buildPreview() {
     const w = state.sourceW;
     const h = state.sourceH;
@@ -1002,6 +1016,87 @@
     return (name || 'image').replace(/\.[^.]+$/, '');
   }
 
+  function downloadBlob(blob, name) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  }
+
+  function syncBatchButton() {
+    const btn = $('btn-batch');
+    if (!btn) return;
+    const n = state.queue.length;
+    btn.textContent = n >= 2 ? '批量导出 ' + n + ' 张' : '批量导出';
+    btn.disabled = state.busy || n < 2 || !state.source;
+  }
+
+  /* 批量导出：当前白平衡算法 / 曝光 / 调色参数作为模板，
+     每张图各自重新分析白平衡与色阶后处理并下载。 */
+  async function exportBatch() {
+    if (state.busy || state.queue.length < 2) return;
+    state.busy = true;
+    const btn = $('btn-batch');
+    btn.disabled = true;
+    const type = $('export-format').value;
+    const ext = type === 'image/png' ? 'png' : 'jpg';
+    const template = JSON.parse(JSON.stringify(state.settings));
+    let done = 0;
+    try {
+      for (const item of state.queue) {
+        btn.textContent = '处理中 ' + (done + 1) + '/' + state.queue.length;
+        await new Promise((r) => setTimeout(r, 20));
+        const src = await decodeFile(item.file);
+        const w = src.width;
+        const h = src.height;
+        const analysis = analyzeSource(src, w, h);
+        const s = JSON.parse(JSON.stringify(template));
+        const gains = estimateWhiteBalance(analysis, s);
+        const expGain = estimateExposure(analysis, gains, s);
+        const levels = estimateLevels(analysis, gains, expGain, s);
+        if (s.autoLevels) {
+          s.low = levels.low;
+          s.high = levels.high;
+        }
+        const auto = {
+          gains,
+          expGain,
+          low: levels.low,
+          high: levels.high,
+          median: levels.median,
+        };
+
+        const c = document.createElement('canvas');
+        c.width = w;
+        c.height = h;
+        const ctx = c.getContext('2d', { willReadFrequently: true });
+        if (type === 'image/jpeg') {
+          ctx.fillStyle = '#fff';
+          ctx.fillRect(0, 0, w, h);
+        }
+        ctx.drawImage(src, 0, 0, w, h);
+        const img = ctx.getImageData(0, 0, w, h);
+        processPixels(img.data, img.data, w, h, s, auto);
+        ctx.putImageData(img, 0, 0);
+
+        const blob = await new Promise((r) => c.toBlob(r, type, 0.92));
+        if (!blob) throw new Error(item.file.name + ' 编码失败');
+        downloadBlob(blob, baseName(item.file.name) + '-auto.' + ext);
+        done++;
+        await new Promise((r) => setTimeout(r, 160));
+      }
+    } catch (e) {
+      window.alert('批量导出中断（已完成 ' + done + ' 张）：' + (e && e.message ? e.message : e));
+    } finally {
+      state.busy = false;
+      syncBatchButton();
+    }
+  }
+
   async function exportImage() {
     if (!state.source || state.busy) return;
     state.busy = true;
@@ -1031,20 +1126,14 @@
 
       const blob = await new Promise((resolve) => c.toBlob(resolve, type, 0.92));
       if (!blob) throw new Error('toBlob failed');
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = baseName(state.name) + '-auto.' + (type === 'image/png' ? 'png' : 'jpg');
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      downloadBlob(blob, baseName(state.name) + '-auto.' + (type === 'image/png' ? 'png' : 'jpg'));
     } catch (e) {
       window.alert('导出失败：' + (e && e.message ? e.message : e));
     } finally {
       state.busy = false;
       btn.disabled = !state.source;
       btn.textContent = label;
+      syncBatchButton();
     }
   }
 
@@ -1057,6 +1146,7 @@
     ].forEach((id) => {
       $(id).disabled = !on;
     });
+    syncBatchButton();
   }
 
   function updateControls() {
@@ -1154,6 +1244,7 @@
     if (!box) return;
     box.textContent = '';
     box.hidden = state.queue.length < 2;
+    syncBatchButton();
     state.queue.forEach((item, i) => {
       const btn = document.createElement('button');
       btn.type = 'button';
@@ -1463,6 +1554,7 @@
     });
 
     $('btn-export').addEventListener('click', exportImage);
+    $('btn-batch').addEventListener('click', exportBatch);
 
     window.addEventListener('resize', () => {
       syncCanvasMax();
