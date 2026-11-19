@@ -22,6 +22,7 @@
     redoFrameButton: $("#redoFrameButton"),
     addFrameButton: $("#addFrameButton"),
     sourceMode: $("#sourceMode"),
+    filmFormat: $("#filmFormat"),
     filmBaseControl: $("#filmBaseControl"),
     filmBaseSwatch: $("#filmBaseSwatch"),
     filmBaseStatus: $("#filmBaseStatus"),
@@ -133,6 +134,7 @@
     });
     els.detectButton.addEventListener("click", detectFrames);
     els.sourceMode.addEventListener("change", handleSourceModeChange);
+    els.filmFormat.addEventListener("change", handleFilmFormatChange);
     els.filmBaseSampleButton.addEventListener("click", toggleFilmBaseSampling);
     els.filmBaseClearButton.addEventListener("click", clearFilmBaseSamples);
     els.sourceRotateLeft.addEventListener("click", () => rotateSourceView(-90));
@@ -215,7 +217,8 @@
         coverage: Number(els.borderCoverage.value) / 100,
         inset: Number(els.edgeInset.value),
         orientation: "auto",
-        sourceMode: "auto"
+        sourceMode: "auto",
+        filmFormat: "auto"
       },
       baseSamples: [],
       filmBase: null,
@@ -239,7 +242,8 @@
       coverage: Number(els.borderCoverage.value) / 100,
       inset: Number(els.edgeInset.value),
       orientation: "auto",
-      sourceMode: els.sourceMode.value
+      sourceMode: els.sourceMode.value,
+      filmFormat: els.filmFormat.value
     };
   }
 
@@ -248,6 +252,7 @@
     els.borderCoverage.value = String(Math.round(job.options.coverage * 100));
     els.edgeInset.value = String(job.options.inset);
     els.sourceMode.value = job.options.sourceMode || "auto";
+    els.filmFormat.value = job.options.filmFormat || "auto";
     updateRangeLabels();
     updateFilmBaseUi(job);
   }
@@ -594,8 +599,527 @@
     }
   }
 
+  // 35mm 片边齿孔在翻拍图中是稳定、等距的高亮小块：先用齿孔带定位片轨两侧，
+  // 再在片轨内部按“横贯整条片轨的暗色分隔线”切分画格。这样可以避免把画格
+  // 内部的暗部（夜空、树影、深浅渐变）误判成片基黑边，也能处理只有单帧的翻拍图。
+  // 标准画幅物理尺寸（长边/短边）。带齿孔的画幅附齿距换算：35mm 齿距约 4.75mm，
+  // 画格高约 5 个齿距，135 画格长约 7.6 齿距，半幅约 3.8 齿距。
+  const FILM_FORMATS = {
+    half: { aspect: 24 / 18, sprockets: true, framePitches: 18 / 4.75 },
+    "135": { aspect: 36 / 24, sprockets: true, framePitches: 36 / 4.75 },
+    "645": { aspect: 56 / 41.5 },
+    "66": { aspect: 1 },
+    "67": { aspect: 68 / 56 },
+    "69": { aspect: 84 / 56 }
+  };
+
+  function formatAspectDeviation(rect, format) {
+    if (!format) return 0;
+    const oriented = Math.max(rect.w / rect.h, rect.h / rect.w);
+    return Math.abs(oriented / format.aspect - 1);
+  }
+
+  function detectSprocketFrames(analysis, options, format) {
+    const { imageData, width, height } = analysis;
+    const data = imageData.data;
+    const total = width * height;
+    const luma = new Float32Array(total);
+    for (let i = 0, offset = 0; i < total; i += 1, offset += 4) {
+      luma[i] = data[offset] * 0.2126 + data[offset + 1] * 0.7152 + data[offset + 2] * 0.0722;
+    }
+    const histogram = new Uint32Array(256);
+    for (let i = 0; i < total; i += 1) histogram[Math.min(255, luma[i] | 0)] += 1;
+    const percentile = (percent) => {
+      let acc = 0;
+      for (let i = 0; i < 256; i += 1) {
+        acc += histogram[i];
+        if (acc / total >= percent / 100) return i;
+      }
+      return 255;
+    };
+    const brightThreshold = Math.max(110, Math.min(215, percentile(99.5) * 0.72));
+
+    const scanProfile = (axis) => {
+      const length = axis === "row" ? height : width;
+      const span = axis === "row" ? width : height;
+      const scores = new Array(length);
+      for (let i = 0; i < length; i += 1) {
+        let run = 0;
+        let shortRuns = 0;
+        let longRun = 0;
+        let brightPixels = 0;
+        for (let j = 0; j <= span; j += 1) {
+          const on = j < span && luma[axis === "row" ? i * width + j : j * width + i] >= brightThreshold;
+          if (on) {
+            run += 1;
+            brightPixels += 1;
+            continue;
+          }
+          if (run > 0) {
+            if (run >= 3 && run <= Math.max(8, span * 0.05)) shortRuns += 1;
+            if (run > span * 0.12) longRun += run;
+            run = 0;
+          }
+        }
+        scores[i] = { shortRuns, longFrac: longRun / span, brightFrac: brightPixels / span };
+      }
+      return scores;
+    };
+    const rowScores = scanProfile("row");
+    const colScores = scanProfile("col");
+
+    const holeSequence = (fixed, axis) => {
+      const length = axis === "row" ? width : height;
+      const centers = [];
+      let run = 0;
+      for (let i = 0; i <= length; i += 1) {
+        const value = i < length
+          ? luma[axis === "row" ? fixed * width + i : i * width + fixed]
+          : 0;
+        if (value >= brightThreshold) {
+          run += 1;
+          continue;
+        }
+        if (run > 0) {
+          if (run >= 3 && run <= Math.max(8, length * 0.05)) centers.push(i - run / 2);
+          run = 0;
+        }
+      }
+      const gaps = [];
+      for (let i = 1; i < centers.length; i += 1) gaps.push(centers[i] - centers[i - 1]);
+      gaps.sort((a, b) => a - b);
+      const pitch = gaps.length ? gaps[gaps.length >> 1] : 0;
+      const deviation = gaps.length > 2 && pitch > 0
+        ? Math.sqrt(gaps.reduce((sum, gap) => sum + (gap - pitch) ** 2, 0) / gaps.length) / pitch
+        : 1;
+      return { centers, pitch, deviation };
+    };
+
+    const findBands = (scores, axis) => {
+      const length = scores.length;
+      const minHoles = Math.max(5, Math.round((axis === "row" ? width : height) / 400));
+      const bands = [];
+      let start = -1;
+      for (let i = 0; i <= length; i += 1) {
+        const score = i < length ? scores[i] : null;
+        const isBand = score
+          && score.shortRuns >= minHoles
+          && score.longFrac < 0.2
+          && score.brightFrac > 0.04
+          && score.brightFrac < 0.58;
+        if (isBand && start < 0) start = i;
+        if (!isBand && start >= 0) {
+          if (i - start >= 4) {
+            const info = holeSequence(Math.round((start + i) / 2), axis);
+            if (info.centers.length >= 4 && info.deviation < 0.4) {
+              bands.push({ start, end: i, pitch: info.pitch, holes: info.centers.length });
+            }
+          }
+          start = -1;
+        }
+      }
+      return bands;
+    };
+    const rowBands = findBands(rowScores, "row");
+    const colBands = findBands(colScores, "col");
+    if (!rowBands.length && !colBands.length) return null;
+
+    const pickPair = (bands, length) => {
+      let best = null;
+      for (let i = 0; i < bands.length; i += 1) {
+        for (let j = i + 1; j < bands.length; j += 1) {
+          const first = bands[i];
+          const second = bands[j];
+          const separation = second.start - first.end;
+          if (separation < length * 0.12) continue;
+          const edgeScore = 1 - Math.abs(first.start / length - 0.05)
+            - Math.abs((length - second.end) / length - 0.05);
+          const score = separation / length + edgeScore;
+          if (!best || score > best.score) best = { first, second, separation, score };
+        }
+      }
+      return best;
+    };
+    // 35mm 画格高度约等于 5 个齿孔间距（24mm / 4.75mm），用它排除把画面纹理
+    // 误识别成齿孔带的情况。
+    const pitchRatioValid = (pair, alongLength) => {
+      if (!pair) return false;
+      const firstPitch = pair.first.pitch;
+      const secondPitch = pair.second.pitch;
+      const pitch = (firstPitch + secondPitch) / 2;
+      if (!pitch) return false;
+      if (pitch < alongLength * 0.035 || pitch > alongLength * 0.12) return false;
+      if (Math.abs(firstPitch - secondPitch) / pitch > 0.2) return false;
+      const ratio = (pair.second.start - pair.first.end) / pitch;
+      return ratio >= 3.6 && ratio <= 6.6;
+    };
+    const rowPair = pitchRatioValid(pickPair(rowBands, height), width) ? pickPair(rowBands, height) : null;
+    const colPair = pitchRatioValid(pickPair(colBands, width), height) ? pickPair(colBands, width) : null;
+    let horizontal = null;
+    if (rowPair && colPair) horizontal = rowPair.separation / height >= colPair.separation / width;
+    else if (rowPair) horizontal = true;
+    else if (colPair) horizontal = false;
+    if (horizontal === null) return null;
+    const edgeBands = horizontal ? rowBands : colBands;
+    const chosenPair = horizontal ? rowPair : colPair;
+    if (!chosenPair) {
+      const band = edgeBands[0];
+      const crossLimit = horizontal ? height : width;
+      const alongSpan = horizontal ? width : height;
+      const atEdge = band.start <= crossLimit * 0.22 || band.end >= crossLimit * 0.78;
+      const pitchValid = band.pitch >= alongSpan * 0.035 && band.pitch <= alongSpan * 0.12;
+      if (!atEdge || !pitchValid) return null;
+    }
+
+    const crossLength = horizontal ? height : width;
+    const alongLength = horizontal ? width : height;
+    const bands = horizontal ? rowBands : colBands;
+    const pair = horizontal ? rowPair : colPair;
+    let crossStart;
+    let crossEnd;
+    if (pair) {
+      crossStart = pair.first.end;
+      crossEnd = pair.second.start;
+    } else {
+      const band = bands[0];
+      if (band.end < crossLength / 2) {
+        crossStart = band.end;
+        crossEnd = crossLength;
+      } else {
+        crossStart = 0;
+        crossEnd = band.start;
+      }
+    }
+    if (crossEnd - crossStart < crossLength * 0.15) return null;
+    // 135/半幅的画格高固定约 5 个齿距；偏差过大说明这对"齿孔带"本身可疑，
+    // 宁可放弃齿孔路径，交给后面的检测兜底。
+    const pitch = pair ? (pair.first.pitch + pair.second.pitch) / 2 : bands[0].pitch;
+    if (format && format.sprockets && pitch > 0) {
+      const heightPitches = (crossEnd - crossStart) / pitch;
+      if (heightPitches < 4 || heightPitches > 6.4) return null;
+    }
+
+    const darkThreshold = Math.max(16, Math.min(36, percentile(6) + 14));
+    const coverage = new Float32Array(alongLength);
+    for (let i = 0; i < alongLength; i += 1) {
+      let dark = 0;
+      for (let j = crossStart; j < crossEnd; j += 1) {
+        const value = horizontal ? luma[j * width + i] : luma[i * width + j];
+        if (value <= darkThreshold) dark += 1;
+      }
+      coverage[i] = dark / (crossEnd - crossStart);
+    }
+    const radius = Math.max(1, Math.round(alongLength * 0.002));
+    const smoothed = new Float32Array(alongLength);
+    for (let i = 0; i < alongLength; i += 1) {
+      let sum = 0;
+      let count = 0;
+      for (let k = -radius; k <= radius; k += 1) {
+        const index = i + k;
+        if (index < 0 || index >= alongLength) continue;
+        sum += coverage[index];
+        count += 1;
+      }
+      smoothed[i] = sum / count;
+    }
+    const maxDividerWidth = Math.max(6, Math.round(alongLength * 0.09));
+    const dividers = [];
+    let dividerStart = -1;
+    for (let i = 0; i <= alongLength; i += 1) {
+      const on = i < alongLength && smoothed[i] >= 0.9;
+      if (on && dividerStart < 0) dividerStart = i;
+      if (!on && dividerStart >= 0) {
+        if (i - dividerStart <= maxDividerWidth) dividers.push({ start: dividerStart, end: i });
+        dividerStart = -1;
+      }
+    }
+    const crossSize = crossEnd - crossStart;
+
+    // 贴边的纯黑片基（均值接近 0、几乎没有噪点）直接裁掉；画面内部的暗部带有
+    // 噪点和层次，不会被误裁。
+    const regionStats = (from, to) => {
+      let sum = 0;
+      let count = 0;
+      let bright = 0;
+      for (let i = from; i < to; i += 2) {
+        for (let j = crossStart; j < crossEnd; j += 2) {
+          const value = horizontal ? luma[j * width + i] : luma[i * width + j];
+          sum += value;
+          if (value > 12) bright += 1;
+          count += 1;
+        }
+      }
+      if (!count) return { mean: 255, brightFraction: 1 };
+      return { mean: sum / count, brightFraction: bright / count };
+    };
+    const pureBlackEdge = (fromStart) => {
+      let index = fromStart ? 0 : alongLength - 1;
+      while (index >= 0 && index < alongLength) {
+        if (smoothed[index] < 0.9) break;
+        index += fromStart ? 1 : -1;
+      }
+      const edgeIndex = clamp(index, 0, alongLength);
+      const length = fromStart ? edgeIndex : alongLength - edgeIndex;
+      if (length < crossSize * 0.06) return 0;
+      const stats = fromStart ? regionStats(0, edgeIndex) : regionStats(edgeIndex, alongLength);
+      // 片基是近乎全黑的低噪点区域；画面内的暗部会有少量亮部细节，不会被误裁。
+      return stats.mean < 4.5 && stats.brightFraction < 0.06 ? length : 0;
+    };
+    const leadingTrim = pureBlackEdge(true);
+    const trailingTrim = pureBlackEdge(false);
+
+    // 画格内部的横向暗带（例如夜空与地面之间的暗部）会把一帧切成两段：当分隔线
+    // 两侧都是接近整帧宽度的画格时，取消这条分隔线，把它们合并回同一画格。
+    let activeDividers = dividers.slice();
+    for (let guard = 0; guard < 6; guard += 1) {
+      const list = [{ end: leadingTrim }, ...activeDividers, { start: alongLength - trailingTrim }];
+      let removed = false;
+      for (let i = 0; i < activeDividers.length; i += 1) {
+        const left = list[i + 1].start - list[i].end;
+        const right = list[i + 2].start - list[i + 1].end;
+        const mergedCap = format && format.sprockets
+          ? crossSize * (format.framePitches / 5.05) * 1.25
+          : crossSize * 2.4;
+        const sameFrame = left >= crossSize * 0.55
+          && right >= crossSize * 0.55
+          && left + right <= mergedCap;
+        if (sameFrame) {
+          activeDividers = activeDividers.filter((_, index) => index !== i);
+          removed = true;
+          break;
+        }
+      }
+      if (!removed) break;
+    }
+
+    const boundaries = [{ end: leadingTrim }, ...activeDividers, { start: alongLength - trailingTrim }];
+    let cells = [];
+    for (let i = 0; i < boundaries.length - 1; i += 1) {
+      const start = boundaries[i].end;
+      const end = boundaries[i + 1].start;
+      const size = end - start;
+      if (size < crossSize * 0.28) continue;
+      let content = 0;
+      let sampled = 0;
+      for (let y = crossStart; y < crossEnd; y += 3) {
+        for (let along = start; along < end; along += 3) {
+          sampled += 1;
+          const value = horizontal ? luma[y * width + along] : luma[along * width + y];
+          if (value > darkThreshold + 14) content += 1;
+        }
+      }
+      const ratio = content / Math.max(1, sampled);
+      if (ratio < 0.16) continue;
+      const rect = horizontal
+        ? { x: start, y: crossStart, w: size, h: crossSize }
+        : { x: crossStart, y: start, w: crossSize, h: size };
+      cells.push({ rect, ratio });
+    }
+    if (!cells.length) {
+      // 夜景等极暗画面亮部占比很低，会被内容过滤全部剔除；此时齿孔几何已经
+      // 确认片轨范围，直接按整条片轨给出一帧，避免回退到误检结果。
+      const start = leadingTrim;
+      const end = alongLength - trailingTrim;
+      const size = end - start;
+      if (size < crossSize * 0.4) return null;
+      cells.push({
+        rect: horizontal
+          ? { x: start, y: crossStart, w: size, h: crossSize }
+          : { x: crossStart, y: start, w: crossSize, h: size },
+        ratio: 0.16
+      });
+    }
+    if (format && format.sprockets && pitch > 0 && cells.length > 1) {
+      // 画幅已知时，画格长度应约等于 N 个齿距；不满足的按碎片剔除。
+      const matched = cells.filter((cell) => {
+        const length = horizontal ? cell.rect.w : cell.rect.h;
+        return Math.abs(length / pitch / format.framePitches - 1) <= 0.32;
+      });
+      if (matched.length) cells = matched;
+    }
+    cells.sort((a, b) => b.rect.w * b.rect.h * b.ratio - a.rect.w * a.rect.h * a.ratio);
+    const frames = cells.slice(0, 4).map((cell) => cell.rect);
+    return {
+      frames,
+      stripCount: 1,
+      stripFrameCounts: [frames.length],
+      orientation: horizontal ? "horizontal" : "vertical",
+      layoutStrength: 0.65,
+      detectionMode: "positive",
+      detector: "sprocket",
+      filmBase: null,
+      filmBaseConfidence: null,
+      filmBaseSource: null
+    };
+  }
+
+  // 没有齿孔（裁切到单帧、或纸张留白扫描）时，用四周背景色把画面主体框出来。
+  function detectContentFrame(analysis, options, format) {
+    const { imageData, width, height } = analysis;
+    const data = imageData.data;
+    const channels = [[], [], []];
+    const ringX = Math.max(2, Math.round(width * 0.012));
+    const ringY = Math.max(2, Math.round(height * 0.012));
+    const stepX = Math.max(1, Math.floor(width / 240));
+    const stepY = Math.max(1, Math.floor(height / 160));
+    const push = (x, y) => {
+      const offset = (y * width + x) * 4;
+      channels[0].push(data[offset]);
+      channels[1].push(data[offset + 1]);
+      channels[2].push(data[offset + 2]);
+    };
+    for (let x = 0; x < width; x += stepX) {
+      for (let depth = 0; depth < ringY; depth += 1) {
+        push(x, depth);
+        push(x, height - 1 - depth);
+      }
+    }
+    for (let y = 0; y < height; y += stepY) {
+      for (let depth = 0; depth < ringX; depth += 1) {
+        push(depth, y);
+        push(width - 1 - depth, y);
+      }
+    }
+    const medianOf = (values) => {
+      values.sort((a, b) => a - b);
+      return values[values.length >> 1];
+    };
+    const background = { r: medianOf(channels[0]), g: medianOf(channels[1]), b: medianOf(channels[2]) };
+    const tolerance = Math.max(30, Math.min(70, Number(options.threshold || 20) + 16));
+    const mask = new Uint8Array(width * height);
+    for (let i = 0, offset = 0; i < mask.length; i += 1, offset += 4) {
+      const diff = Math.max(
+        Math.abs(data[offset] - background.r),
+        Math.abs(data[offset + 1] - background.g),
+        Math.abs(data[offset + 2] - background.b)
+      );
+      mask[i] = diff > tolerance ? 1 : 0;
+    }
+    const rowFraction = new Float32Array(height);
+    for (let y = 0; y < height; y += 1) {
+      let count = 0;
+      for (let x = 0; x < width; x += 1) count += mask[y * width + x];
+      rowFraction[y] = count / width;
+    }
+    const colFraction = new Float32Array(width);
+    for (let x = 0; x < width; x += 1) {
+      let count = 0;
+      for (let y = 0; y < height; y += 1) count += mask[y * width + x];
+      colFraction[x] = count / height;
+    }
+    const longestRun = (fraction, minFraction) => {
+      let best = null;
+      let start = -1;
+      for (let i = 0; i <= fraction.length; i += 1) {
+        const on = i < fraction.length && fraction[i] >= minFraction;
+        if (on && start < 0) start = i;
+        if (!on && start >= 0) {
+          if (!best || i - start > best.end - best.start) best = { start, end: i };
+          start = -1;
+        }
+      }
+      return best;
+    };
+    const rows = longestRun(rowFraction, 0.22);
+    const cols = longestRun(colFraction, 0.22);
+    if (!rows || !cols) return null;
+    let rect = { x: cols.start, y: rows.start, w: cols.end - cols.start, h: rows.end - rows.start };
+    if (rect.w < width * 0.2 || rect.h < height * 0.2) return null;
+    const aspect = rect.w / rect.h;
+    if (aspect < 0.5 || aspect > 2.8) return null;
+    if (format && formatAspectDeviation(rect, format) > 0.3) {
+      // 内容框偏小（画面边缘与背景同色）时，按标准画幅比例向外扩，只扩不缩。
+      const expandWidth = rect.w / rect.h < format.aspect;
+      const grown = { ...rect };
+      if (expandWidth) {
+        const targetW = Math.round(rect.h * format.aspect);
+        const grow = Math.max(0, (targetW - rect.w) / 2);
+        grown.x = Math.max(0, Math.round(rect.x - grow));
+        const right = Math.min(width, Math.round(rect.x + rect.w + grow));
+        grown.w = right - grown.x;
+      } else {
+        const targetH = Math.round(rect.w / format.aspect);
+        const grow = Math.max(0, (targetH - rect.h) / 2);
+        grown.y = Math.max(0, Math.round(rect.y - grow));
+        const bottom = Math.min(height, Math.round(rect.y + rect.h + grow));
+        grown.h = bottom - grown.y;
+      }
+      // 新扩入的行列仍需以内容为主，纯背景则退回原框。
+      let added = 0;
+      let hit = 0;
+      const probe = (fraction, from, to) => {
+        for (let i = Math.round(from); i < Math.round(to); i += 1) {
+          added += 1;
+          if (fraction[i] >= 0.12) hit += 1;
+        }
+      };
+      if (expandWidth) {
+        probe(colFraction, grown.x, rect.x);
+        probe(colFraction, rect.x + rect.w, grown.x + grown.w);
+      } else {
+        probe(rowFraction, grown.y, rect.y);
+        probe(rowFraction, rect.y + rect.h, grown.y + grown.h);
+      }
+      if (added && hit / added >= 0.5 && formatAspectDeviation(grown, format) < formatAspectDeviation(rect, format)) {
+        rect = grown;
+      }
+    }
+    let inside = 0;
+    let sampled = 0;
+    for (let y = rect.y; y < rect.y + rect.h; y += 3) {
+      for (let x = rect.x; x < rect.x + rect.w; x += 3) {
+        sampled += 1;
+        inside += mask[y * width + x];
+      }
+    }
+    if (inside / Math.max(1, sampled) < 0.25) return null;
+    return {
+      rect,
+      area: (rect.w * rect.h) / (width * height)
+    };
+  }
+
+  // 判断多框结果是否构成一条连贯的胶片条。若各框尺寸、横跨位置明显不一致，
+  // 多半是画面暗部被误判成画框，不足以压过整幅内容框。
+  function isCoherentStrip(frames, orientation, imageArea, format) {
+    if (!Array.isArray(frames) || frames.length < 2) return false;
+    const horizontal = orientation !== "vertical";
+    const alongSizes = frames.map((frame) => (horizontal ? frame.w : frame.h));
+    const crossSizes = frames.map((frame) => (horizontal ? frame.h : frame.w));
+    const crossCenters = frames.map((frame) => (horizontal ? frame.y + frame.h / 2 : frame.x + frame.w / 2));
+    const stat = (values) => {
+      const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+      if (!mean) return { mean: 0, cv: 1 };
+      const variance = values.reduce((sum, value) => sum + (value - mean) * (value - mean), 0) / values.length;
+      return { mean, cv: Math.sqrt(variance) / mean };
+    };
+    const along = stat(alongSizes);
+    const cross = stat(crossSizes);
+    const centerSpread = Math.max(...crossCenters) - Math.min(...crossCenters);
+    const aspectOk = format
+      ? frames.every((frame) => formatAspectDeviation(frame, format) <= 0.35)
+      : frames.every((frame) => {
+        const ratio = Math.max(frame.w, frame.h) / Math.max(1, Math.min(frame.w, frame.h));
+        return ratio >= 1.05 && ratio <= 1.95;
+      });
+    const coverage = frames.reduce((sum, frame) => sum + frame.w * frame.h, 0) / imageArea;
+    return (
+      aspectOk &&
+      along.cv < 0.16 &&
+      cross.cv < 0.16 &&
+      centerSpread <= cross.mean * 0.3 &&
+      coverage >= 0.35
+    );
+  }
+
   function runDetection(analysis, options) {
     const requestedMode = options.sourceMode || "auto";
+    const format = FILM_FORMATS[options.filmFormat] || null;
+    // 120 系画幅没有齿孔，直接跳过齿孔检测，避免画面内容被误认成齿孔带。
+    if (requestedMode === "auto" && (!format || format.sprockets)) {
+      const sprocketResult = detectSprocketFrames(analysis, options, format);
+      if (sprocketResult) return sprocketResult;
+    }
     let positiveResult = null;
     if (requestedMode !== "negative") {
       const blackMask = createBlackMask(analysis.imageData.data, analysis.width, analysis.height, options.threshold);
@@ -648,7 +1172,51 @@
 
     if (requestedMode === "negative") return bestNegative.result;
     const positiveScore = positiveResult ? scoreResult(positiveResult, analysis) : 0;
-    return bestNegative.score > positiveScore * 1.08 + 2 ? bestNegative.result : positiveResult;
+    const legacyResult = bestNegative.score > positiveScore * 1.08 + 2 ? bestNegative.result : positiveResult;
+    if (requestedMode !== "auto" || !legacyResult) return legacyResult;
+    const contentFrame = detectContentFrame(analysis, options, format);
+    if (!contentFrame) return legacyResult;
+    const imageArea = analysis.width * analysis.height;
+    const legacyArea = legacyResult.frames.reduce((best, frame) => Math.max(best, frame.w * frame.h), 0) / imageArea;
+    // 远小于主画格的碎框（多为片边/齿孔/画面暗部误检）剔除，避免多框结果被误认为胶片条。
+    if (legacyResult.frames.length > 1) {
+      const kept = legacyResult.frames.filter((frame) => frame.w * frame.h >= legacyArea * imageArea * 0.1);
+      if (kept.length && kept.length !== legacyResult.frames.length) {
+        const groups = [];
+        for (const frame of kept) {
+          const key = frame.stripIndex ?? 0;
+          let group = groups.find((entry) => entry.key === key);
+          if (!group) {
+            group = { key, frames: [] };
+            groups.push(group);
+          }
+          group.frames.push(frame);
+        }
+        const counts = [];
+        for (const group of groups) {
+          const index = counts.length;
+          counts.push(group.frames.length);
+          for (const frame of group.frames) frame.stripIndex = index;
+        }
+        legacyResult.frames = kept;
+        legacyResult.stripCount = counts.length;
+        legacyResult.stripFrameCounts = counts;
+      }
+    }
+    const coherentStrip = isCoherentStrip(legacyResult.frames, legacyResult.orientation, imageArea, format);
+    if (coherentStrip || contentFrame.area <= Math.max(0.14, legacyArea * 1.15)) return legacyResult;
+    return {
+      frames: [contentFrame.rect],
+      stripCount: 1,
+      stripFrameCounts: [1],
+      orientation: contentFrame.rect.w >= contentFrame.rect.h ? "horizontal" : "vertical",
+      layoutStrength: 0.5,
+      detectionMode: "positive",
+      detector: "content",
+      filmBase: null,
+      filmBaseConfidence: null,
+      filmBaseSource: null
+    };
   }
 
   function runDetectionWithMasks(analysis, options, mask, foregroundMask) {
@@ -1662,6 +2230,19 @@
     updateFrameHistoryButtons();
   }
 
+  function deleteFrameAtIndex(index) {
+    if (state.busy || index < 0 || index >= state.frames.length) return;
+    const previousSnapshot = createFrameSnapshot();
+    state.frames.splice(index, 1);
+    if (state.selectedIndex > index) state.selectedIndex -= 1;
+    state.selectedIndex = state.frames.length
+      ? clamp(state.selectedIndex, 0, state.frames.length - 1)
+      : -1;
+    commitFrameHistory(previousSnapshot);
+    renderAll();
+    showToast(`已删除画格 ${String(index + 1).padStart(2, "0")}`);
+  }
+
   function undoFrameEdit() {
     const job = getActiveJob();
     if (!job?.undoStack?.length || state.busy) return;
@@ -1808,7 +2389,7 @@
       const fineRotationNote = normalizeFineRotation(frame.fineRotation)
         ? ` · 微调 ${formatSignedAngle(frame.fineRotation)}`
         : "";
-      info.innerHTML = `<p><b>FRAME ${String(index + 1).padStart(2, "0")}</b><small>输出 ${outputSize.width} × ${outputSize.height} PX${fineRotationNote}</small></p><div class="frame-tools"><div class="frame-rotation" aria-label="画格 ${index + 1} 预览与导出角度"><button class="frame-rotate-button" data-rotate="-90" type="button" aria-label="向左旋转预览与导出" title="向左旋转预览与导出">↶</button><output>${normalizeRotation(frame.previewRotation)}°</output><button class="frame-rotate-button" data-rotate="90" type="button" aria-label="向右旋转预览与导出" title="向右旋转预览与导出">↷</button></div><button class="frame-check" type="button" aria-label="${frame.checked ? "取消选择" : "选择"}画格 ${index + 1}"></button></div>`;
+      info.innerHTML = `<p><b>FRAME ${String(index + 1).padStart(2, "0")}</b><small>输出 ${outputSize.width} × ${outputSize.height} PX${fineRotationNote}</small></p><div class="frame-tools"><div class="frame-rotation" aria-label="画格 ${index + 1} 预览与导出角度"><button class="frame-rotate-button" data-rotate="-90" type="button" aria-label="向左旋转预览与导出" title="向左旋转预览与导出">↶</button><output>${normalizeRotation(frame.previewRotation)}°</output><button class="frame-rotate-button" data-rotate="90" type="button" aria-label="向右旋转预览与导出" title="向右旋转预览与导出">↷</button></div><button class="frame-delete-button" type="button" aria-label="删除画格 ${index + 1}" title="删除画格">✕</button><button class="frame-check" type="button" aria-label="${frame.checked ? "取消选择" : "选择"}画格 ${index + 1}"></button></div>`;
       card.append(preview, info);
 
       info.querySelectorAll(".frame-rotate-button").forEach((button) => {
@@ -1823,6 +2404,11 @@
       });
 
       card.addEventListener("click", (event) => {
+        if (event.target.closest(".frame-delete-button")) {
+          event.stopPropagation();
+          deleteFrameAtIndex(index);
+          return;
+        }
         state.selectedIndex = index;
         if (event.target.closest(".frame-check")) frame.checked = !frame.checked;
         renderAll();
@@ -1836,6 +2422,9 @@
           state.selectedIndex = index;
           frame.checked = !frame.checked;
           renderAll();
+        } else if (event.key === "Delete") {
+          event.preventDefault();
+          deleteFrameAtIndex(index);
         }
       });
       els.framesGrid.append(card);
@@ -2258,6 +2847,13 @@
       }
     }
     return { r: median(red), g: median(green), b: median(blue) };
+  }
+
+  function handleFilmFormatChange() {
+    const job = getActiveJob();
+    if (!job || state.busy) return;
+    job.options.filmFormat = els.filmFormat.value;
+    void detectFrames();
   }
 
   function handleSourceModeChange() {
@@ -3040,6 +3636,7 @@
     els.canvasShell.classList.toggle("is-scanning", busy);
     els.detectButton.disabled = busy;
     els.sourceMode.disabled = busy;
+    els.filmFormat.disabled = busy;
     els.filmBaseSampleButton.disabled = busy;
     els.filmBaseClearButton.disabled = busy;
     els.canvasMessage.hidden = !busy && Boolean(state.analysis);
