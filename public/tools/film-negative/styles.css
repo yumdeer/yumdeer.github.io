@@ -65,23 +65,15 @@ body {
   z-index: 10;
 }
 
-.topbar .brand,
-.topbar .home-link {
+.topbar .brand {
   color: var(--ink-soft);
   text-decoration: none;
   font-size: 13px;
   transition: color 0.2s;
 }
 
-.topbar .brand:hover,
-.topbar .home-link:hover {
+.topbar .brand:hover {
   color: var(--accent);
-}
-
-.topbar-divider {
-  width: 1px;
-  height: 16px;
-  background: var(--line);
 }
 
 .topbar .title {
