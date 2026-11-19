@@ -1434,6 +1434,70 @@
     });
   }
 
+  /* ---------- 卡片折叠 ---------- */
+
+  const COLLAPSE_KEY = 'auto-tone:collapsed';
+
+  function loadCollapsed() {
+    try {
+      const raw = localStorage.getItem(COLLAPSE_KEY);
+      const obj = raw ? JSON.parse(raw) : {};
+      if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return {};
+      return obj;
+    } catch (err) {
+      return {};
+    }
+  }
+
+  function saveCollapsed(flags) {
+    try {
+      localStorage.setItem(COLLAPSE_KEY, JSON.stringify(flags));
+    } catch (err) {
+      /* 隐私模式下写入失败可忽略 */
+    }
+  }
+
+  function setupCollapsibleCards() {
+    const cards = Array.from(document.querySelectorAll('.card'));
+    const saved = loadCollapsed();
+
+    cards.forEach((card) => {
+      const head = card.querySelector('.card-head');
+      if (!head) return;
+      /* 以卡片标题作为折叠状态的键，调整卡片顺序后状态不会串位 */
+      const titleEl = head.querySelector('h2');
+      const key = titleEl ? titleEl.textContent.trim() : '';
+
+      const body = document.createElement('div');
+      body.className = 'card-body';
+      while (head.nextSibling) body.appendChild(head.nextSibling);
+      card.appendChild(body);
+
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'card-toggle';
+      btn.setAttribute('aria-label', '折叠或展开面板');
+      btn.innerHTML =
+        '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" ' +
+        'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+        '<path d="M6 9l6 6 6-6"></path></svg>';
+      btn.addEventListener('click', () => {
+        const next = !card.classList.contains('is-collapsed');
+        card.classList.toggle('is-collapsed', next);
+        btn.setAttribute('aria-expanded', String(!next));
+        saved[key] = next;
+        saveCollapsed(saved);
+        if (!next && state.lastStats) drawHistogram(state.lastStats);
+      });
+      head.appendChild(btn);
+
+      const collapsed = saved[key] === true;
+      card.classList.toggle('is-collapsed', collapsed);
+      btn.setAttribute('aria-expanded', String(!collapsed));
+    });
+  }
+
+  setupCollapsibleCards();
   setControlsEnabled(false);
   updateControls();
   initEvents();
