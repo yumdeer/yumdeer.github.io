@@ -913,7 +913,7 @@
       const rect = horizontal
         ? { x: start, y: crossStart, w: size, h: crossSize }
         : { x: crossStart, y: start, w: crossSize, h: size };
-      cells.push({ rect, ratio });
+      cells.push({ rect, ratio, fromGap: i > 0, toGap: i + 1 < boundaries.length - 1 });
     }
     if (!cells.length) {
       // 夜景等极暗画面亮部占比很低，会被内容过滤全部剔除；此时齿孔几何已经
@@ -937,8 +937,54 @@
       });
       if (matched.length) cells = matched;
     }
+    // 齿孔几何能给出每帧的标准尺寸：35mm 画格高固定 24mm（约 5.05 齿距），
+    // 画格长由画幅决定（135 约 7.58 齿距，半幅约 3.79 齿距）。翻拍画面在暗部
+    // 截止时内容边界会短于真实画格，按齿距还原后暗部不再被当成片基裁掉，
+    // 宽高比也回到标准值。未指定画幅时按最常见的 135 处理。
+    if (pitch > 0) {
+      const standardPitches = format && format.sprockets ? format.framePitches : 36 / 4.75;
+      const standardLength = Math.round(standardPitches * pitch);
+      const standardHeight = Math.round((24 / 4.75) * pitch);
+      cells = cells.map((cell) => {
+        const rect = { ...cell.rect };
+        const length = horizontal ? rect.w : rect.h;
+        const maxStart = Math.max(0, alongLength - standardLength);
+        if (standardLength > 0 && Math.abs(length / standardLength - 1) > 0.06) {
+          let anchor;
+          if (cell.fromGap && cell.toGap) anchor = horizontal ? rect.x : rect.y;
+          else if (cell.fromGap) anchor = horizontal ? rect.x : rect.y;
+          else if (cell.toGap) anchor = (horizontal ? rect.x + rect.w : rect.y + rect.h) - standardLength;
+          else anchor = (horizontal ? rect.x : rect.y) + (length - standardLength) / 2;
+          anchor = clamp(Math.round(anchor), 0, maxStart);
+          if (horizontal) {
+            rect.x = anchor;
+            rect.w = Math.min(standardLength, alongLength - anchor);
+          } else {
+            rect.y = anchor;
+            rect.h = Math.min(standardLength, alongLength - anchor);
+          }
+        }
+        const crossNow = horizontal ? rect.h : rect.w;
+        // 两侧齿孔带都识别到时，片轨中心可靠，画格高直接取标准 24mm；
+        // 只有单侧齿孔带时才在偏差过大时校正，避免中心偏移。
+        if (standardHeight > 0 && (pair || Math.abs(crossNow / standardHeight - 1) > 0.08)) {
+          const center = horizontal ? rect.y + rect.h / 2 : rect.x + rect.w / 2;
+          const crossAt = clamp(Math.round(center - standardHeight / 2), 0, Math.max(0, crossLength - standardHeight));
+          if (horizontal) {
+            rect.y = crossAt;
+            rect.h = Math.min(standardHeight, crossLength - crossAt);
+          } else {
+            rect.x = crossAt;
+            rect.w = Math.min(standardHeight, crossLength - crossAt);
+          }
+        }
+        return { ...cell, rect };
+      });
+    }
     cells.sort((a, b) => b.rect.w * b.rect.h * b.ratio - a.rect.w * a.rect.h * a.ratio);
-    const frames = cells.slice(0, 4).map((cell) => cell.rect);
+    // 画格尺寸已按齿距标准化，不能再按亮度裁剪，否则画面暗部会被二次误裁。
+    // 假分隔线会让同一帧生成两个重叠画格，这里按重叠度去重。
+    const frames = dedupeAndSort(cells.slice(0, 4).map((cell) => ({ ...cell.rect })));
     return {
       frames,
       stripCount: 1,
@@ -953,20 +999,103 @@
     };
   }
 
+  // 检测框常把贴边的纯黑片基、扫描背景一并框进来。这里从四边向内剥离"几乎没有
+  // 内容"的边条，并允许跨过窄的孤立亮条（扫描仪边缘伪影），让画框落在真实画面上。
+  function trimNoContentEdges(analysis, rect, backgroundLuma) {
+    const { width, height } = analysis;
+    const data = analysis.imageData.data;
+    const stride = Math.max(1, Math.round(Math.max(width, height) / 600));
+    const lumaAt = (x, y) => {
+      const offset = (y * width + x) * 4;
+      return data[offset] * 0.2126 + data[offset + 1] * 0.7152 + data[offset + 2] * 0.0722;
+    };
+    const threshold = backgroundLuma + 12;
+    // 片基是"又黑又平"的，画面暗部通常带纹理或渐变；两者都满足才判为无内容。
+    const stats = (from, count, axis) => {
+      let sum = 0;
+      let sumSq = 0;
+      let bright = 0;
+      let total = 0;
+      for (let i = 0; i < count; i += stride) {
+        const value = axis === "y" ? lumaAt(from, rect.y + i) : lumaAt(rect.x + i, from);
+        sum += value;
+        sumSq += value * value;
+        if (value > threshold) bright += 1;
+        total += 1;
+      }
+      if (!total) return { bright: 0, flat: true };
+      const mean = sum / total;
+      const variance = Math.max(0, sumSq / total - mean * mean);
+      return { bright: bright / total, flat: mean < threshold + 8 && variance < 16 };
+    };
+    const colContent = (x) => {
+      const s = stats(x, rect.h, "y");
+      return s.bright >= minContent || !s.flat;
+    };
+    const rowContent = (y) => {
+      const s = stats(y, rect.w, "x");
+      return s.bright >= minContent || !s.flat;
+    };
+    const minContent = 0.05;
+    const maxIsland = Math.max(8, Math.round(Math.max(width, height) * 0.055));
+    // 从 from 开始按 dir 推进到 limit，返回第一处"连续有内容"的坐标；窄亮条视为伪影跳过。
+    // span 用矩形自然边界统计，避免被剥离上限截断。
+    const scan = (fractionAt, from, limit, dir, bound) => {
+      let cursor = from;
+      const inBounds = (i) => (dir > 0 ? i <= bound : i >= bound);
+      while (dir > 0 ? cursor < limit : cursor > limit) {
+        if (!fractionAt(cursor)) {
+          cursor += dir;
+          continue;
+        }
+        let probe = cursor;
+        let span = 0;
+        while (inBounds(probe) && fractionAt(probe)) {
+          probe += dir;
+          span += 1;
+        }
+        if (span >= maxIsland) return cursor;
+        cursor = probe;
+      }
+      return null;
+    };
+    const reachX = Math.max(1, Math.round(rect.w * 0.4));
+    const reachY = Math.max(1, Math.round(rect.h * 0.4));
+    const left = scan(colContent, rect.x, rect.x + reachX, 1, rect.x + rect.w - 1);
+    const right = scan(colContent, rect.x + rect.w - 1, rect.x + rect.w - reachX, -1, rect.x);
+    const top = scan(rowContent, rect.y, rect.y + reachY, 1, rect.y + rect.h - 1);
+    const bottom = scan(rowContent, rect.y + rect.h - 1, rect.y + rect.h - reachY, -1, rect.y);
+    const nextLeft = left ?? rect.x;
+    const nextRight = right ?? rect.x + rect.w - 1;
+    const nextTop = top ?? rect.y;
+    const nextBottom = bottom ?? rect.y + rect.h - 1;
+    const trimmed = {
+      x: nextLeft,
+      y: nextTop,
+      w: nextRight - nextLeft + 1,
+      h: nextBottom - nextTop + 1
+    };
+    if (trimmed.w < rect.w * 0.35 || trimmed.h < rect.h * 0.35) return rect;
+    return trimmed;
+  }
+
   // 没有齿孔（裁切到单帧、或纸张留白扫描）时，用四周背景色把画面主体框出来。
   function detectContentFrame(analysis, options, format) {
     const { imageData, width, height } = analysis;
     const data = imageData.data;
-    const channels = [[], [], []];
+    const samples = [];
     const ringX = Math.max(2, Math.round(width * 0.012));
     const ringY = Math.max(2, Math.round(height * 0.012));
     const stepX = Math.max(1, Math.floor(width / 240));
     const stepY = Math.max(1, Math.floor(height / 160));
     const push = (x, y) => {
       const offset = (y * width + x) * 4;
-      channels[0].push(data[offset]);
-      channels[1].push(data[offset + 1]);
-      channels[2].push(data[offset + 2]);
+      samples.push({
+        r: data[offset],
+        g: data[offset + 1],
+        b: data[offset + 2],
+        l: data[offset] * 0.2126 + data[offset + 1] * 0.7152 + data[offset + 2] * 0.0722
+      });
     };
     for (let x = 0; x < width; x += stepX) {
       for (let depth = 0; depth < ringY; depth += 1) {
@@ -980,12 +1109,16 @@
         push(width - 1 - depth, y);
       }
     }
-    const medianOf = (values) => {
-      values.sort((a, b) => a - b);
-      return values[values.length >> 1];
-    };
-    const background = { r: medianOf(channels[0]), g: medianOf(channels[1]), b: medianOf(channels[2]) };
+    // 取偏暗的 30 分位作背景色：翻拍图两侧常有贯穿整高的亮条纹（背纸标记、
+    // 扫描仪边缘），中位数会被拉高，把深色画面误判成背景。
+    samples.sort((a, b) => a.l - b.l);
+    const pick = samples[Math.min(samples.length - 1, Math.floor(samples.length * 0.3))] || { r: 0, g: 0, b: 0 };
+    const background = { r: pick.r, g: pick.g, b: pick.b };
     const tolerance = Math.max(30, Math.min(70, Number(options.threshold || 20) + 16));
+    const luma = new Float32Array(width * height);
+    for (let i = 0, offset = 0; i < luma.length; i += 1, offset += 4) {
+      luma[i] = data[offset] * 0.2126 + data[offset + 1] * 0.7152 + data[offset + 2] * 0.0722;
+    }
     const mask = new Uint8Array(width * height);
     for (let i = 0, offset = 0; i < mask.length; i += 1, offset += 4) {
       const diff = Math.max(
@@ -993,35 +1126,60 @@
         Math.abs(data[offset + 1] - background.g),
         Math.abs(data[offset + 2] - background.b)
       );
-      mask[i] = diff > tolerance ? 1 : 0;
+      // 深色画面（夜空、暗调背景）与纯黑片基颜色接近，但前者带纹理和渐变；
+      // 用垂直梯度补一条判据，避免暗部画面被整体判成背景。
+      const texture = i >= width ? Math.abs(luma[i] - luma[i - width]) : 0;
+      mask[i] = diff > tolerance || texture > 7 ? 1 : 0;
     }
+    const backgroundLuma = (background.r + background.g + background.b) / 3;
+    // 行/列判据取"非背景像素占比"和"相对背景的亮度抬升"中的较大者：暗调画面
+    // （夜空、阴影）整行都接近背景色，单看占比会漏掉，但亮度抬升仍可识别。
     const rowFraction = new Float32Array(height);
     for (let y = 0; y < height; y += 1) {
       let count = 0;
-      for (let x = 0; x < width; x += 1) count += mask[y * width + x];
-      rowFraction[y] = count / width;
+      let sum = 0;
+      for (let x = 0; x < width; x += 1) {
+        count += mask[y * width + x];
+        sum += luma[y * width + x];
+      }
+      rowFraction[y] = Math.max(count / width, (sum / width - backgroundLuma) / 60);
     }
     const colFraction = new Float32Array(width);
     for (let x = 0; x < width; x += 1) {
       let count = 0;
-      for (let y = 0; y < height; y += 1) count += mask[y * width + x];
-      colFraction[x] = count / height;
+      let sum = 0;
+      for (let y = 0; y < height; y += 1) {
+        count += mask[y * width + x];
+        sum += luma[y * width + x];
+      }
+      colFraction[x] = Math.max(count / height, (sum / height - backgroundLuma) / 60);
     }
-    const longestRun = (fraction, minFraction) => {
+    // 画面内部的深阴影会让个别行/列短暂跌到阈值以下；容忍不超过 3% 的断点，
+    // 避免同一画面被切成两段后只取到较长的一半。
+    const longestRun = (fraction, minFraction, maxGap) => {
       let best = null;
       let start = -1;
+      let gap = 0;
       for (let i = 0; i <= fraction.length; i += 1) {
         const on = i < fraction.length && fraction[i] >= minFraction;
-        if (on && start < 0) start = i;
-        if (!on && start >= 0) {
-          if (!best || i - start > best.end - best.start) best = { start, end: i };
+        if (on) {
+          if (start < 0) start = i;
+          gap = 0;
+          continue;
+        }
+        if (start < 0) continue;
+        gap += 1;
+        if (gap > maxGap || i === fraction.length) {
+          const end = i - gap;
+          if (end > start && (!best || end - start > best.end - best.start)) best = { start, end };
           start = -1;
+          gap = 0;
         }
       }
       return best;
     };
-    const rows = longestRun(rowFraction, 0.22);
-    const cols = longestRun(colFraction, 0.22);
+    const rows = longestRun(rowFraction, 0.15, Math.round(height * 0.03));
+    const cols = longestRun(colFraction, 0.15, Math.round(width * 0.03));
     if (!rows || !cols) return null;
     let rect = { x: cols.start, y: rows.start, w: cols.end - cols.start, h: rows.end - rows.start };
     if (rect.w < width * 0.2 || rect.h < height * 0.2) return null;
@@ -1073,6 +1231,7 @@
       }
     }
     if (inside / Math.max(1, sampled) < 0.25) return null;
+    rect = trimNoContentEdges(analysis, rect, Math.round((background.r + background.g + background.b) / 3));
     return {
       rect,
       area: (rect.w * rect.h) / (width * height)
