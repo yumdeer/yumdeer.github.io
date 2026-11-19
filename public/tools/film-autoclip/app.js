@@ -893,6 +893,25 @@
     }
 
     const boundaries = [{ end: leadingTrim }, ...activeDividers, { start: alongLength - trailingTrim }];
+    // 检测到齿孔即说明是 35mm 片基：未指定画幅时按 135 标准画格推算边界。
+    const sprocketPitches = format && format.sprockets ? format.framePitches : format ? 0 : 36 / 4.75;
+    // 在分隔线里挑"最接近标准画格长度"的一段：片轨首尾是人工截断位置，
+    // 加惩罚后优先用画格之间的暗缝确定边界。
+    const bestFrameSpan = (standardLength) => {
+      let best = null;
+      for (let i = 0; i < boundaries.length - 1; i += 1) {
+        const from = boundaries[i].end;
+        for (let j = i + 1; j < boundaries.length; j += 1) {
+          const to = boundaries[j].start;
+          const length = to - from;
+          if (length < standardLength * 0.85 || length > standardLength * 1.15) continue;
+          const penalty = (i === 0 ? 0.05 : 0) + (j === boundaries.length - 1 ? 0.05 : 0);
+          const score = Math.abs(length / standardLength - 1) + penalty;
+          if (!best || score < best.score) best = { from, to, score };
+        }
+      }
+      return best;
+    };
     let cells = [];
     for (let i = 0; i < boundaries.length - 1; i += 1) {
       const start = boundaries[i].end;
@@ -917,9 +936,17 @@
     }
     if (!cells.length) {
       // 夜景等极暗画面亮部占比很低，会被内容过滤全部剔除；此时齿孔几何已经
-      // 确认片轨范围，直接按整条片轨给出一帧，避免回退到误检结果。
-      const start = leadingTrim;
-      const end = alongLength - trailingTrim;
+      // 确认片轨范围。优先在分隔线里挑"最接近标准画格长度"的一段，避免把
+      // 整条片轨（含相邻画格的边缘、扫描底板）一并框进来。
+      let start = leadingTrim;
+      let end = alongLength - trailingTrim;
+      if (sprocketPitches > 0 && pitch > 0) {
+        const best = bestFrameSpan(sprocketPitches * pitch);
+        if (best) {
+          start = best.from;
+          end = best.to;
+        }
+      }
       const size = end - start;
       if (size < crossSize * 0.4) return null;
       cells.push({
@@ -928,6 +955,24 @@
           : { x: crossStart, y: start, w: crossSize, h: size },
         ratio: 0.16
       });
+    }
+    if (sprocketPitches > 0 && pitch > 0 && cells.length === 1) {
+      const standardLength = sprocketPitches * pitch;
+      const length = horizontal ? cells[0].rect.w : cells[0].rect.h;
+      if (Math.abs(length / standardLength - 1) > 0.12) {
+        const best = bestFrameSpan(standardLength);
+        if (best) {
+          const rect = { ...cells[0].rect };
+          if (horizontal) {
+            rect.x = best.from;
+            rect.w = best.to - best.from;
+          } else {
+            rect.y = best.from;
+            rect.h = best.to - best.from;
+          }
+          cells = [{ ...cells[0], rect }];
+        }
+      }
     }
     if (format && format.sprockets && pitch > 0 && cells.length > 1) {
       // 画幅已知时，画格长度应约等于 N 个齿距；不满足的按碎片剔除。
@@ -948,14 +993,14 @@
       cells = cells.map((cell) => {
         const rect = { ...cell.rect };
         const length = horizontal ? rect.w : rect.h;
-        const maxStart = Math.max(0, alongLength - standardLength);
         if (standardLength > 0 && Math.abs(length / standardLength - 1) > 0.06) {
           let anchor;
           if (cell.fromGap && cell.toGap) anchor = horizontal ? rect.x : rect.y;
           else if (cell.fromGap) anchor = horizontal ? rect.x : rect.y;
           else if (cell.toGap) anchor = (horizontal ? rect.x + rect.w : rect.y + rect.h) - standardLength;
           else anchor = (horizontal ? rect.x : rect.y) + (length - standardLength) / 2;
-          anchor = clamp(Math.round(anchor), 0, maxStart);
+          // 起点优先：靠近片轨右端时保留锚点、缩短长度，避免整段被左移出画框。
+          anchor = Math.max(0, Math.round(anchor));
           if (horizontal) {
             rect.x = anchor;
             rect.w = Math.min(standardLength, alongLength - anchor);
@@ -999,9 +1044,221 @@
     };
   }
 
+  // 扫描仪底板、纸张留白常是纯白边条，会把检测框撑到画面之外；先裁掉纯白边，
+  // 再做检测，最后把坐标偏移补回去。
+  function cropWhiteMargins(analysis) {
+    const { width, height } = analysis;
+    const data = analysis.imageData.data;
+    const lineMean = (axis, pos) => {
+      let sum = 0;
+      let count = 0;
+      if (axis === "row") {
+        for (let x = 0; x < width; x += 4) {
+          const offset = (pos * width + x) * 4;
+          sum += data[offset] * 0.2126 + data[offset + 1] * 0.7152 + data[offset + 2] * 0.0722;
+          count += 1;
+        }
+      } else {
+        for (let y = 0; y < height; y += 4) {
+          const offset = (y * width + pos) * 4;
+          sum += data[offset] * 0.2126 + data[offset + 1] * 0.7152 + data[offset + 2] * 0.0722;
+          count += 1;
+        }
+      }
+      return count ? sum / count : 0;
+    };
+    const maxTrimY = Math.round(height * 0.25);
+    const maxTrimX = Math.round(width * 0.25);
+    // 扫描白边不一定纯白（翻拍时底板会带阴影），只要边条明显比片基亮、
+    // 且紧邻内侧是暗色片基，就视为白边；画面本身很亮时内侧也亮，不会误裁。
+    const edgeTrim = (axis, maxTrim, maxPos) => {
+      let count = 0;
+      let pos = 0;
+      while (count < maxTrim && lineMean(axis, pos) > 180) {
+        count += 1;
+        pos += 1;
+      }
+      if (count < 6) return 0;
+      const inner = Math.min(maxPos - 1, pos + 30);
+      return lineMean(axis, inner) < 80 ? count : 0;
+    };
+    let top = edgeTrim("row", maxTrimY, height);
+    let bottom = height - 1 - edgeTrim("row", maxTrimY, height);
+    let left = edgeTrim("col", maxTrimX, width);
+    let right = width - 1 - edgeTrim("col", maxTrimX, width);
+    // 反方向（底部/右侧）单独计算
+    const edgeTrimReverse = (axis, maxTrim, maxPos) => {
+      let count = 0;
+      let pos = maxPos - 1;
+      while (count < maxTrim && lineMean(axis, pos) > 180) {
+        count += 1;
+        pos -= 1;
+      }
+      if (count < 6) return 0;
+      const inner = Math.max(0, pos - 30);
+      return lineMean(axis, inner) < 80 ? count : 0;
+    };
+    top = edgeTrim("row", maxTrimY, height);
+    bottom = height - 1 - edgeTrimReverse("row", maxTrimY, height);
+    left = edgeTrim("col", maxTrimX, width);
+    right = width - 1 - edgeTrimReverse("col", maxTrimX, width);
+    const w = right - left + 1;
+    const h = bottom - top + 1;
+    if (w < width * 0.5 || h < height * 0.5 || (!left && !top && w === width && h === height)) {
+      return { analysis, offsetX: 0, offsetY: 0 };
+    }
+    const cropped = new Uint8ClampedArray(w * h * 4);
+    const source = data;
+    for (let y = 0; y < h; y += 1) {
+      const from = ((y + top) * width + left) * 4;
+      cropped.set(source.subarray(from, from + w * 4), y * w * 4);
+    }
+    return {
+      analysis: { imageData: { data: cropped, width: w, height: h }, width: w, height: h },
+      offsetX: left,
+      offsetY: top
+    };
+  }
+
+  // 120 画幅没有齿孔，画面边缘若落在暗部（树影、夜景），内容检测会少框；
+  // 这里按用户选定的固定画幅比例，把缺的一边朝"有内容（亮度或纹理）"的方向补齐，
+  // 遇到纯片基（又黑又平）立即停止，避免把黑色片基框进画面。
+  function extendRectToFormat(analysis, rect, format, backgroundLuma) {
+    if (!format || !(format.aspect > 0)) return rect;
+    const { width, height } = analysis;
+    const data = analysis.imageData.data;
+    const stride = Math.max(1, Math.round(Math.max(width, height) / 400));
+    const lumaAt = (x, y) => {
+      const offset = (y * width + x) * 4;
+      return data[offset] * 0.2126 + data[offset + 1] * 0.7152 + data[offset + 2] * 0.0722;
+    };
+    const next = { ...rect };
+    const bandStats = (axis, pos) => {
+      let sum = 0;
+      let sumSq = 0;
+      let count = 0;
+      if (axis === "row") {
+        if (pos < 0 || pos >= height) return null;
+        const x0 = next.x + Math.round(next.w * 0.08);
+        const x1 = next.x + Math.round(next.w * 0.92);
+        for (let x = x0; x < x1; x += stride) {
+          const value = lumaAt(x, pos);
+          sum += value;
+          sumSq += value * value;
+          count += 1;
+        }
+      } else {
+        if (pos < 0 || pos >= width) return null;
+        const y0 = next.y + Math.round(next.h * 0.08);
+        const y1 = next.y + Math.round(next.h * 0.92);
+        for (let y = y0; y < y1; y += stride) {
+          const value = lumaAt(pos, y);
+          sum += value;
+          sumSq += value * value;
+          count += 1;
+        }
+      }
+      if (!count) return null;
+      const mean = sum / count;
+      return { mean, std: Math.sqrt(Math.max(0, sumSq / count - mean * mean)) };
+    };
+    const hasContent = (axis, pos) => {
+      const s = bandStats(axis, pos);
+      return s ? s.mean > backgroundLuma + 12 || s.std > 10 : false;
+    };
+    const ratio = next.w / next.h;
+    const targetAspect = format.aspect;
+    if (Math.abs(ratio / targetAspect - 1) <= 0.08) return next;
+    const growY = ratio > targetAspect;
+    const axis = growY ? "row" : "col";
+    const maxPos = growY ? height : width;
+    const edgeStart = growY ? next.y : next.x;
+    const edgeSize = growY ? next.h : next.w;
+    const crossSize = growY ? next.w : next.h;
+    const target = Math.round(growY ? next.w / targetAspect : next.h * targetAspect);
+    const need = target - edgeSize;
+    if (need <= 0) return next;
+    // 两侧各探一段，看哪一侧更像画面，优先朝那一侧扩。
+    const sideScore = (dir) => {
+      const from = dir < 0 ? edgeStart - need : edgeStart + edgeSize;
+      let hit = 0;
+      let total = 0;
+      for (let d = 0; d < need; d += stride) {
+        const pos = dir < 0 ? from + d : from + d;
+        if (pos < 0 || pos >= maxPos) continue;
+        total += 1;
+        if (hasContent(axis, pos)) hit += 1;
+      }
+      return total ? hit / total : 0;
+    };
+    const up = sideScore(-1);
+    const down = sideScore(1);
+    if (Math.max(up, down) < 0.25) {
+      // 暗夜画面顶部常是极暗天空（亮度接近片基、纹理很弱），内容判据会当成空白。
+      // 用户已指定画幅时按画幅补足高度，优先朝空间更大的一侧扩展；遇到明显亮于
+      // 片基的边条（扫描底板/白边）立即停止，避免把底板框进来。
+      const upRoom = edgeStart;
+      const downRoom = maxPos - (edgeStart + edgeSize);
+      const room = Math.max(upRoom, downRoom);
+      if (room <= 0) return next;
+      const dir = upRoom >= downRoom ? -1 : 1;
+      const span = Math.min(need, room);
+      const edge = dir < 0 ? edgeStart : edgeStart + edgeSize;
+      let cursor = edge;
+      while (Math.abs(cursor - edge) < span) {
+        const s = bandStats(axis, dir < 0 ? cursor - 1 : cursor);
+        if (!s || s.mean > backgroundLuma + 40) break;
+        cursor += dir;
+      }
+      if (cursor === edge) return next;
+      if (growY) {
+        if (dir < 0) {
+          next.y = cursor;
+          next.h = edgeStart + edgeSize - cursor;
+        } else {
+          next.h = cursor - edgeStart;
+        }
+      } else if (dir < 0) {
+        next.x = cursor;
+        next.w = edgeStart + edgeSize - cursor;
+      } else {
+        next.w = cursor - edgeStart;
+      }
+      return next;
+    }
+    const dir = up >= down ? -1 : 1;
+    const edge = dir < 0 ? edgeStart : edgeStart + edgeSize;
+    const limit = clamp(edge + dir * need, 0, maxPos);
+    const maxFlat = Math.max(6, Math.round(crossSize * 0.02));
+    let cursor = edge;
+    let flat = 0;
+    while (dir < 0 ? cursor > limit : cursor < limit) {
+      const pos = dir < 0 ? cursor - 1 : cursor;
+      if (hasContent(axis, pos)) flat = 0;
+      else flat += 1;
+      if (flat > maxFlat) break;
+      cursor += dir;
+    }
+    if (cursor === edge) return next;
+    if (growY) {
+      if (dir < 0) {
+        next.y = cursor;
+        next.h = edgeStart + edgeSize - cursor;
+      } else {
+        next.h = cursor - edgeStart;
+      }
+    } else if (dir < 0) {
+      next.x = cursor;
+      next.w = edgeStart + edgeSize - cursor;
+    } else {
+      next.w = cursor - edgeStart;
+    }
+    return next;
+  }
+
   // 检测框常把贴边的纯黑片基、扫描背景一并框进来。这里从四边向内剥离"几乎没有
   // 内容"的边条，并允许跨过窄的孤立亮条（扫描仪边缘伪影），让画框落在真实画面上。
-  function trimNoContentEdges(analysis, rect, backgroundLuma) {
+  function trimNoContentEdges(analysis, rect, backgroundLuma, strict) {
     const { width, height } = analysis;
     const data = analysis.imageData.data;
     const stride = Math.max(1, Math.round(Math.max(width, height) / 600));
@@ -1023,16 +1280,21 @@
         if (value > threshold) bright += 1;
         total += 1;
       }
-      if (!total) return { bright: 0, flat: true };
+      if (!total) return { bright: 0, flat: true, mean: 0 };
       const mean = sum / total;
       const variance = Math.max(0, sumSq / total - mean * mean);
-      return { bright: bright / total, flat: mean < threshold + 8 && variance < 16 };
+      return { bright: bright / total, mean, flat: mean < threshold + 8 && variance < 16 };
     };
+    // 已知画幅时只用亮度判定：扫描条纹、片边反光的方差很大，用方差判据会把
+    // 暗色片基误当成内容，导致贴边的噪声带被保留、宽度被撑大。
     const colContent = (x) => {
       const s = stats(x, rect.h, "y");
-      return s.bright >= minContent || !s.flat;
+      return strict ? s.mean > backgroundLuma + 30 : s.bright >= minContent || !s.flat;
     };
+    // 行方向不按亮度裁：暗夜画面顶部与片基亮度接近，裁掉会丢失真实画面，
+    // 高度缺口由上层的画幅补足逻辑处理。
     const rowContent = (y) => {
+      if (strict) return true;
       const s = stats(y, rect.w, "x");
       return s.bright >= minContent || !s.flat;
     };
@@ -1185,43 +1447,7 @@
     if (rect.w < width * 0.2 || rect.h < height * 0.2) return null;
     const aspect = rect.w / rect.h;
     if (aspect < 0.5 || aspect > 2.8) return null;
-    if (format && formatAspectDeviation(rect, format) > 0.3) {
-      // 内容框偏小（画面边缘与背景同色）时，按标准画幅比例向外扩，只扩不缩。
-      const expandWidth = rect.w / rect.h < format.aspect;
-      const grown = { ...rect };
-      if (expandWidth) {
-        const targetW = Math.round(rect.h * format.aspect);
-        const grow = Math.max(0, (targetW - rect.w) / 2);
-        grown.x = Math.max(0, Math.round(rect.x - grow));
-        const right = Math.min(width, Math.round(rect.x + rect.w + grow));
-        grown.w = right - grown.x;
-      } else {
-        const targetH = Math.round(rect.w / format.aspect);
-        const grow = Math.max(0, (targetH - rect.h) / 2);
-        grown.y = Math.max(0, Math.round(rect.y - grow));
-        const bottom = Math.min(height, Math.round(rect.y + rect.h + grow));
-        grown.h = bottom - grown.y;
-      }
-      // 新扩入的行列仍需以内容为主，纯背景则退回原框。
-      let added = 0;
-      let hit = 0;
-      const probe = (fraction, from, to) => {
-        for (let i = Math.round(from); i < Math.round(to); i += 1) {
-          added += 1;
-          if (fraction[i] >= 0.12) hit += 1;
-        }
-      };
-      if (expandWidth) {
-        probe(colFraction, grown.x, rect.x);
-        probe(colFraction, rect.x + rect.w, grown.x + grown.w);
-      } else {
-        probe(rowFraction, grown.y, rect.y);
-        probe(rowFraction, rect.y + rect.h, grown.y + grown.h);
-      }
-      if (added && hit / added >= 0.5 && formatAspectDeviation(grown, format) < formatAspectDeviation(rect, format)) {
-        rect = grown;
-      }
-    }
+    rect = extendRectToFormat(analysis, rect, format, backgroundLuma);
     let inside = 0;
     let sampled = 0;
     for (let y = rect.y; y < rect.y + rect.h; y += 3) {
@@ -1231,7 +1457,12 @@
       }
     }
     if (inside / Math.max(1, sampled) < 0.25) return null;
-    rect = trimNoContentEdges(analysis, rect, Math.round((background.r + background.g + background.b) / 3));
+    rect = trimNoContentEdges(
+      analysis,
+      rect,
+      Math.round((background.r + background.g + background.b) / 3),
+      Boolean(format)
+    );
     return {
       rect,
       area: (rect.w * rect.h) / (width * height)
@@ -1272,6 +1503,19 @@
   }
 
   function runDetection(analysis, options) {
+    const cropped = cropWhiteMargins(analysis);
+    const result = detectOnAnalysis(cropped.analysis, options);
+    if (result && (cropped.offsetX || cropped.offsetY)) {
+      result.frames = result.frames.map((frame) => ({
+        ...frame,
+        x: frame.x + cropped.offsetX,
+        y: frame.y + cropped.offsetY
+      }));
+    }
+    return result;
+  }
+
+  function detectOnAnalysis(analysis, options) {
     const requestedMode = options.sourceMode || "auto";
     const format = FILM_FORMATS[options.filmFormat] || null;
     // 120 系画幅没有齿孔，直接跳过齿孔检测，避免画面内容被误认成齿孔带。
@@ -2233,9 +2477,26 @@
   }
 
   function dedupeAndSort(frames) {
+    // 按面积从大到小比较：假分隔线会切出"大半帧 + 贴边碎片"，碎片的 IoU 可能
+    // 不到 0.82，但基本被大框完全包含；用包含度再拦一层，避免同一帧出两个框。
+    const sorted = frames.slice().sort((a, b) => b.w * b.h - a.w * a.h);
     const unique = [];
-    for (const frame of frames) {
-      const duplicate = unique.some((other) => intersectionOverUnion(frame, other) > .82);
+    for (let i = 0; i < sorted.length; i += 1) {
+      const frame = sorted[i];
+      let duplicate = false;
+      for (let j = 0; j < i; j += 1) {
+        const other = sorted[j];
+        const left = Math.max(frame.x, other.x);
+        const top = Math.max(frame.y, other.y);
+        const right = Math.min(frame.x + frame.w, other.x + other.w);
+        const bottom = Math.min(frame.y + frame.h, other.y + other.h);
+        const overlap = Math.max(0, right - left) * Math.max(0, bottom - top);
+        const smaller = Math.min(frame.w * frame.h, other.w * other.h);
+        if (intersectionOverUnion(frame, other) > 0.82 || overlap / Math.max(1, smaller) > 0.75) {
+          duplicate = true;
+          break;
+        }
+      }
       if (!duplicate) unique.push(frame);
     }
     return unique.sort((a, b) => (a.x - b.x) || (a.y - b.y));
@@ -2330,6 +2591,41 @@
     }
     const activeJob = getActiveJob();
     if (activeJob?.meta) updateSourceMeta(activeJob);
+    renderJobQueue();
+    updateExportState();
+  }
+
+  // 批量导出完成后一次性清理已导出底的底片，避免用户逐张点删除。
+  async function clearExportedJobs(jobIds) {
+    const ids = new Set(jobIds);
+    if (!ids.size) return;
+    const activeRemoved = ids.has(state.activeJobId);
+    for (let index = state.jobs.length - 1; index >= 0; index -= 1) {
+      if (ids.has(state.jobs[index].id)) state.jobs.splice(index, 1);
+    }
+    if (!state.jobs.length) {
+      releaseRuntime();
+      state.activeJobId = null;
+      els.workspace.hidden = true;
+      els.intro.hidden = false;
+      renderJobQueue();
+      updateExportState();
+      return;
+    }
+    if (activeRemoved) {
+      state.activeJobId = null;
+      const replacement = state.jobs[0];
+      try {
+        await loadJobRuntime(replacement, { render: true });
+      } catch (error) {
+        console.error(error);
+        replacement.status = "error";
+        replacement.error = "图片读取失败";
+      }
+    } else {
+      const activeJob = getActiveJob();
+      if (activeJob?.meta) updateSourceMeta(activeJob);
+    }
     renderJobQueue();
     updateExportState();
   }
@@ -3369,6 +3665,7 @@
     const originalJobId = state.activeJobId;
     let exportedCount = 0;
     const failedJobs = [];
+    const exportedJobIds = [];
     try {
       const quality = Number(els.exportQuality.value);
       for (let jobIndex = 0; jobIndex < selectedJobs.length; jobIndex += 1) {
@@ -3389,6 +3686,8 @@
             }
             exportedCount += 1;
           }
+          // 整份底片的画格都导出成功才清理；有未勾选画格的底片保留在目录里。
+          if (selectedFrames.length === job.frames.length) exportedJobIds.push(job.id);
         } catch (error) {
           console.error(error);
           failedJobs.push(job.file.name);
@@ -3397,15 +3696,19 @@
       }
 
       const suffix = failedJobs.length ? `，${failedJobs.length} 份底片失败` : "";
+      const cleared = exportedJobIds.length ? `，已清理 ${exportedJobIds.length} 份底片` : "";
       showToast(directoryHandle
-        ? `已将 ${exportedCount} 张画格保存至 ${directoryHandle.name}${suffix}`
-        : `已发送 ${exportedCount} 个独立下载${suffix}`);
+        ? `已将 ${exportedCount} 张画格保存至 ${directoryHandle.name}${suffix}${cleared}`
+        : `已发送 ${exportedCount} 个独立下载${suffix}${cleared}`);
     } catch (error) {
       console.error(error);
       showToast(error?.userMessage || "导出失败。图片过大时，可减少所选画格后重试。");
     } finally {
       if (exportedCount > 0) void window.filmFrameStats?.recordExport(exportedCount);
-      const originalJob = state.jobs.find((job) => job.id === originalJobId) || state.jobs[0];
+      const originalExported = exportedJobIds.includes(originalJobId);
+      const originalJob = originalExported
+        ? null
+        : state.jobs.find((job) => job.id === originalJobId) || state.jobs[0];
       if (originalJob && state.activeJobId !== originalJob.id) {
         try {
           await loadJobRuntime(originalJob, { render: true });
@@ -3417,6 +3720,7 @@
         renderJobDetectionStatus(originalJob);
       }
       setBusy(false);
+      if (exportedJobIds.length) await clearExportedJobs(exportedJobIds);
     }
   }
 
