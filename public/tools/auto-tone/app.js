@@ -1422,6 +1422,7 @@
     $('btn-export').addEventListener('click', exportImage);
 
     window.addEventListener('resize', () => {
+      syncCanvasMax();
       if (state.lastStats) drawHistogram(state.lastStats);
     });
 
@@ -1432,6 +1433,22 @@
         updateView();
       }
     });
+  }
+
+  /* ---------- 画布高度 ---------- */
+
+  /* 三栏布局下舞台撑满一屏，画布最大高度取中间列剩余空间，保证图片可放大
+     且直方图底部与左右面板底部对齐；堆叠布局回退到 CSS 默认值。 */
+  function syncCanvasMax() {
+    const vp = $('viewport');
+    if (!vp) return;
+    const root = document.documentElement;
+    if (!window.matchMedia('(min-width: 1041px)').matches) {
+      root.style.removeProperty('--canvas-max-h');
+      return;
+    }
+    const h = vp.clientHeight;
+    if (h > 0) root.style.setProperty('--canvas-max-h', Math.max(160, h - 12) + 'px');
   }
 
   /* ---------- 卡片折叠 ---------- */
@@ -1487,6 +1504,7 @@
         btn.setAttribute('aria-expanded', String(!next));
         saved[key] = next;
         saveCollapsed(saved);
+        syncCanvasMax();
         if (!next && state.lastStats) drawHistogram(state.lastStats);
       });
       head.appendChild(btn);
@@ -1498,6 +1516,7 @@
   }
 
   setupCollapsibleCards();
+  syncCanvasMax();
   setControlsEnabled(false);
   updateControls();
   initEvents();
