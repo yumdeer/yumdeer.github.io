@@ -90,6 +90,8 @@
     splitRatio: 0.5,
     compareHold: false,
     busy: false,
+    queue: [],
+    queueIndex: 0,
   };
 
   /* ---------- 数学工具 ---------- */
@@ -1135,6 +1137,46 @@
     updateControls();
   }
 
+  /* ---------- 多图队列 ---------- */
+
+  function setQueue(files) {
+    const list = Array.from(files || []).filter((f) => f && (!f.type || /^image\//.test(f.type)));
+    if (!list.length) return;
+    state.queue.forEach((item) => URL.revokeObjectURL(item.url));
+    state.queue = list.map((file) => ({ file, url: URL.createObjectURL(file) }));
+    state.queueIndex = 0;
+    renderQueue();
+    loadFile(state.queue[0].file);
+  }
+
+  function renderQueue() {
+    const box = $('file-queue');
+    if (!box) return;
+    box.textContent = '';
+    box.hidden = state.queue.length < 2;
+    state.queue.forEach((item, i) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'queue-item' + (i === state.queueIndex ? ' is-active' : '');
+      btn.title = item.file.name;
+      const img = document.createElement('img');
+      img.src = item.url;
+      img.alt = '';
+      const name = document.createElement('span');
+      name.className = 'queue-name';
+      name.textContent = item.file.name;
+      btn.appendChild(img);
+      btn.appendChild(name);
+      btn.addEventListener('click', () => {
+        if (i === state.queueIndex) return;
+        state.queueIndex = i;
+        renderQueue();
+        loadFile(item.file);
+      });
+      box.appendChild(btn);
+    });
+  }
+
   async function loadFile(file) {
     state.coarse = false;
     if (!file || (file.type && !/^image\//.test(file.type))) return;
@@ -1158,6 +1200,7 @@
       setControlsEnabled(true);
       runAuto();
       updateView();
+      renderQueue();
     } catch (e) {
       $('file-tag').textContent = '读取失败';
       window.alert('无法读取这张图片，请换一张试试。');
@@ -1178,7 +1221,7 @@
       }
     });
     fileInput.addEventListener('change', () => {
-      if (fileInput.files && fileInput.files[0]) loadFile(fileInput.files[0]);
+      if (fileInput.files && fileInput.files.length) setQueue(fileInput.files);
       fileInput.value = '';
     });
 
@@ -1195,8 +1238,8 @@
       });
     });
     drop.addEventListener('drop', (e) => {
-      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-      if (f) loadFile(f);
+      const files = e.dataTransfer && e.dataTransfer.files;
+      if (files && files.length) setQueue(files);
     });
     const viewport = $('viewport');
     ['dragenter', 'dragover'].forEach((ev) => {
@@ -1204,8 +1247,8 @@
     });
     viewport.addEventListener('drop', (e) => {
       e.preventDefault();
-      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-      if (f) loadFile(f);
+      const files = e.dataTransfer && e.dataTransfer.files;
+      if (files && files.length) setQueue(files);
     });
 
     $('wb-enabled').addEventListener('change', (e) => {
