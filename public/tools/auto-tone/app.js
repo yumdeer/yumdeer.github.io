@@ -1035,10 +1035,34 @@
     btn.disabled = state.busy || n < 2 || !state.source;
   }
 
+  /* 优先让用户选择目标文件夹（File System Access API），
+     不支持时回退为逐张下载。 */
+  async function pickBatchDir() {
+    if (typeof window.showDirectoryPicker !== 'function') {
+      return { supported: false, dir: null };
+    }
+    try {
+      const dir = await window.showDirectoryPicker({ id: 'auto-tone-batch', mode: 'readwrite' });
+      return { supported: true, dir };
+    } catch (e) {
+      return { supported: true, dir: null };
+    }
+  }
+
+  async function writeToDir(dir, name, blob) {
+    const fh = await dir.getFileHandle(name, { create: true });
+    const ws = await fh.createWritable();
+    await ws.write(blob);
+    await ws.close();
+  }
+
   /* 批量导出：当前白平衡算法 / 曝光 / 调色参数作为模板，
-     每张图各自重新分析白平衡与色阶后处理并下载。 */
+     每张图各自重新分析白平衡与色阶后处理，写入所选文件夹。 */
   async function exportBatch() {
     if (state.busy || state.queue.length < 2) return;
+    const picked = await pickBatchDir();
+    if (picked.supported && !picked.dir) return;
+    const dir = picked.dir;
     state.busy = true;
     const btn = $('btn-batch');
     btn.disabled = true;
@@ -1085,7 +1109,9 @@
 
         const blob = await new Promise((r) => c.toBlob(r, type, 0.92));
         if (!blob) throw new Error(item.file.name + ' 编码失败');
-        downloadBlob(blob, baseName(item.file.name) + '-auto.' + ext);
+        const outName = baseName(item.file.name) + '-auto.' + ext;
+        if (dir) await writeToDir(dir, outName, blob);
+        else downloadBlob(blob, outName);
         done++;
         await new Promise((r) => setTimeout(r, 160));
       }
@@ -1282,7 +1308,16 @@
       state.sourceH = h;
       state.name = file.name || 'image';
 
-      resetSettings();
+      /* 切换图片时保留白平衡算法、曝光目标与调色参数，
+         让同一套设置统一作用于队列内的每张图片 */
+      state.settings.low = 0;
+      state.settings.high = 1;
+      state.coarse = false;
+      state.split = false;
+      state.splitRatio = 0.5;
+      state.compareHold = false;
+      $('btn-split').classList.remove('is-active');
+      updateControls();
       buildAnalysis();
       buildPreview();
       $('drop-empty').hidden = true;
