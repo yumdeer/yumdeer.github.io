@@ -23,6 +23,7 @@
     addFrameButton: $("#addFrameButton"),
     sourceMode: $("#sourceMode"),
     filmFormat: $("#filmFormat"),
+    cropScope: $("#cropScope"),
     filmBaseControl: $("#filmBaseControl"),
     filmBaseSwatch: $("#filmBaseSwatch"),
     filmBaseStatus: $("#filmBaseStatus"),
@@ -135,6 +136,7 @@
     els.detectButton.addEventListener("click", detectFrames);
     els.sourceMode.addEventListener("change", handleSourceModeChange);
     els.filmFormat.addEventListener("change", handleFilmFormatChange);
+    els.cropScope.addEventListener("change", handleCropScopeChange);
     els.filmBaseSampleButton.addEventListener("click", toggleFilmBaseSampling);
     els.filmBaseClearButton.addEventListener("click", clearFilmBaseSamples);
     els.sourceRotateLeft.addEventListener("click", () => rotateSourceView(-90));
@@ -243,7 +245,8 @@
       inset: Number(els.edgeInset.value),
       orientation: "auto",
       sourceMode: els.sourceMode.value,
-      filmFormat: els.filmFormat.value
+      filmFormat: els.filmFormat.value,
+      cropScope: els.cropScope.value
     };
   }
 
@@ -253,6 +256,7 @@
     els.edgeInset.value = String(job.options.inset);
     els.sourceMode.value = job.options.sourceMode || "auto";
     els.filmFormat.value = job.options.filmFormat || "auto";
+    els.cropScope.value = job.options.cropScope || "frame";
     updateRangeLabels();
     updateFilmBaseUi(job);
   }
@@ -1502,9 +1506,119 @@
     );
   }
 
+  // 片边预留比例：135 片基宽 35mm、画格横向 24mm；120 片基宽 61.5mm、画格横向 56mm。
+  const FILM_BORDER_MODELS = {
+    sprocket: { crossMm: 24, filmMm: 35, alongRatio: 0.03 },
+    "120": { crossMm: 56, filmMm: 61.5, alongRatio: 0.05 }
+  };
+
+  // 向外扩出的一条带子是否仍属于胶片：片基偏暗（允许齿孔亮块），
+  // 而不是扫描白底或纸张，避免紧裁切图被扩出一圈白边。
+  function isFilmBorderBand(analysis, axis, from, to, alongStart, alongEnd) {
+    const { imageData, width } = analysis;
+    const data = imageData.data;
+    const lo = Math.min(from, to);
+    const hi = Math.max(from, to);
+    if (hi - lo < 1) return false;
+    const alongSpan = Math.max(1, alongEnd - alongStart);
+    const step = Math.max(1, Math.round(alongSpan / 80));
+    let total = 0;
+    let bright = 0;
+    let dark = 0;
+    for (let pos = Math.round(lo); pos < hi; pos += 1) {
+      for (let along = Math.round(alongStart); along < alongEnd; along += step) {
+        const x = axis === "x" ? pos : along;
+        const y = axis === "x" ? along : pos;
+        const offset = (y * width + x) * 4;
+        const luma = data[offset] * 0.2126 + data[offset + 1] * 0.7152 + data[offset + 2] * 0.0722;
+        total += 1;
+        if (luma >= 200) bright += 1;
+        else if (luma <= 90) dark += 1;
+      }
+    }
+    if (!total) return false;
+    return bright / total <= 0.55 && dark / total >= 0.12;
+  }
+
+  // 沿单一方向逐段试探，直到超出片基或达到该方向的预留上限。
+  function probeFilmPad(analysis, axis, edge, direction, maxPad, alongStart, alongEnd) {
+    if (maxPad <= 0) return 0;
+    const size = axis === "x" ? analysis.width : analysis.height;
+    const step = Math.max(2, Math.round(Math.abs(alongEnd - alongStart) * 0.04));
+    let pos = edge;
+    while (Math.abs(pos - edge) + step <= maxPad) {
+      const next = pos + direction * step;
+      if (next < 0 || next > size) break;
+      if (!isFilmBorderBand(analysis, axis, pos, next, alongStart, alongEnd)) break;
+      pos = next;
+      if (direction < 0 ? pos <= 0 : pos >= size) break;
+    }
+    return Math.abs(pos - edge);
+  }
+
+  const medianPad = (values) => {
+    const sorted = [...values].sort((a, b) => a - b);
+    return sorted[Math.floor(sorted.length / 2)] || 0;
+  };
+
+  // 保留片边模式：把每个画格沿片条宽度方向扩到整条胶片，露出齿孔与片边，
+  // 同时统一各画格输出尺寸，避免成片大小不一。
+  function expandFramesToFilmBorder(frames, analysis, options, result) {
+    if (!frames.length) return frames;
+    const format = FILM_FORMATS[options.filmFormat] || null;
+    const model = !format || format.sprockets ? FILM_BORDER_MODELS.sprocket : FILM_BORDER_MODELS["120"];
+    const crossRatio = model.filmMm / model.crossMm - 1;
+    const boundsW = analysis.width;
+    const boundsH = analysis.height;
+    const pads = frames.map((frame) => {
+      // 齿孔沿片条方向排列；片条竖直时片宽方向是 x，无法判断朝向时用短边。
+      const crossIsX = result && result.orientation
+        ? result.orientation === "vertical"
+        : frame.w <= frame.h;
+      const crossSize = crossIsX ? frame.w : frame.h;
+      const alongSize = crossIsX ? frame.h : frame.w;
+      const crossPad = (crossSize * crossRatio) / 2;
+      const alongPad = (alongSize * model.alongRatio) / 2;
+      const padX = crossIsX ? crossPad : alongPad;
+      const padY = crossIsX ? alongPad : crossPad;
+      return {
+        left: probeFilmPad(analysis, "x", frame.x, -1, padX, frame.y, frame.y + frame.h),
+        right: probeFilmPad(analysis, "x", frame.x + frame.w, 1, padX, frame.y, frame.y + frame.h),
+        top: probeFilmPad(analysis, "y", frame.y, -1, padY, frame.x, frame.x + frame.w),
+        bottom: probeFilmPad(analysis, "y", frame.y + frame.h, 1, padY, frame.x, frame.x + frame.w)
+      };
+    });
+    // 同一条片上的画格共用片边位置，取中位数统一扩边，避免个别画格多扩出白边。
+    const shared = {
+      left: medianPad(pads.map((pad) => pad.left)),
+      right: medianPad(pads.map((pad) => pad.right)),
+      top: medianPad(pads.map((pad) => pad.top)),
+      bottom: medianPad(pads.map((pad) => pad.bottom))
+    };
+    const expanded = frames.map((frame) => {
+      const left = Math.max(0, frame.x - shared.left);
+      const top = Math.max(0, frame.y - shared.top);
+      const right = Math.min(boundsW, frame.x + frame.w + shared.right);
+      const bottom = Math.min(boundsH, frame.y + frame.h + shared.bottom);
+      return { x: left, y: top, w: right - left, h: bottom - top };
+    });
+    const outW = Math.max(1, Math.min(boundsW, Math.round(Math.max(...expanded.map((frame) => frame.w)))));
+    const outH = Math.max(1, Math.min(boundsH, Math.round(Math.max(...expanded.map((frame) => frame.h)))));
+    return expanded.map((frame, index) => {
+      const centerX = frame.x + frame.w / 2;
+      const centerY = frame.y + frame.h / 2;
+      const x = clamp(Math.round(centerX - outW / 2), 0, Math.max(0, boundsW - outW));
+      const y = clamp(Math.round(centerY - outH / 2), 0, Math.max(0, boundsH - outH));
+      return { ...frames[index], x, y, w: outW, h: outH };
+    });
+  }
+
   function runDetection(analysis, options) {
     const cropped = cropWhiteMargins(analysis);
     const result = detectOnAnalysis(cropped.analysis, options);
+    if (result && options && options.cropScope === "sprocket") {
+      result.frames = expandFramesToFilmBorder(result.frames, cropped.analysis, options, result);
+    }
     if (result && (cropped.offsetX || cropped.offsetY)) {
       result.frames = result.frames.map((frame) => ({
         ...frame,
@@ -3311,6 +3425,13 @@
     void detectFrames();
   }
 
+  function handleCropScopeChange() {
+    const job = getActiveJob();
+    if (!job || state.busy) return;
+    job.options.cropScope = els.cropScope.value;
+    void detectFrames();
+  }
+
   function handleSourceModeChange() {
     const job = getActiveJob();
     if (!job || state.busy) return;
@@ -4100,6 +4221,7 @@
     els.detectButton.disabled = busy;
     els.sourceMode.disabled = busy;
     els.filmFormat.disabled = busy;
+    els.cropScope.disabled = busy;
     els.filmBaseSampleButton.disabled = busy;
     els.filmBaseClearButton.disabled = busy;
     els.canvasMessage.hidden = !busy && Boolean(state.analysis);

@@ -714,6 +714,13 @@ main {
   font-size: 13px;
 }
 
+.field-hint {
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
 .film-base-control {
   margin-top: 8px;
   padding: 8px;
