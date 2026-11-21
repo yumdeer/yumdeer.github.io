@@ -1755,9 +1755,72 @@
     });
   }
 
+  // 用户明确选择画幅时，画格比例与格数是强约束：暗部画格容易在掩膜检测中
+  // 漏检或只框住局部，导致比例偏离画幅、整卷少一格。检测结果明显偏离所选
+  // 画幅时，按画幅比例与实测格距重建等距网格。
+  function refineFramesWithExplicitFormat(result, analysis, options) {
+    const format = FILM_FORMATS[options.filmFormat];
+    if (!format || options.cropScope !== "frame" || !result || !result.frames.length) return result;
+    const frames = result.frames;
+    const union = frames.reduce((box, frame) => ({
+      x0: Math.min(box.x0, frame.x),
+      y0: Math.min(box.y0, frame.y),
+      x1: Math.max(box.x1, frame.x + frame.w),
+      y1: Math.max(box.y1, frame.y + frame.h)
+    }), { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity });
+    const horizontal = union.x1 - union.x0 >= union.y1 - union.y0;
+    const crossStart = horizontal ? union.y0 : union.x0;
+    const crossSize = horizontal ? union.y1 - union.y0 : union.x1 - union.x0;
+    const alongStart = horizontal ? union.x0 : union.y0;
+    const alongEnd = horizontal ? union.x1 : union.y1;
+    const span = alongEnd - alongStart;
+    if (crossSize < 24 || span < 24) return result;
+
+    const lengths = frames
+      .map((frame) => (horizontal ? frame.w : frame.h))
+      .sort((a, b) => a - b);
+    const median = lengths[Math.floor((lengths.length - 1) / 2)];
+    if (!median) return result;
+
+    // 画幅换算出的画格长度与实测格距必须接近，避免用户选错画幅时强行切分画面。
+    const expected = crossSize * format.aspect;
+    if (span < expected || Math.abs(expected / median - 1) > 0.25) return result;
+    const count = Math.round(span / median);
+    if (count < 2 || count > 12) return result;
+    const step = span / count;
+    if (Math.abs(step / expected - 1) > 0.2) return result;
+
+    const deviated = frames.some((frame) => formatAspectDeviation(frame, format) > 0.08);
+    if (!deviated && frames.length === count) return result;
+
+    const inset = Math.round(options.inset / Math.max(state.scaleX, 0.001));
+    const rebuilt = [];
+    for (let index = 0; index < count; index += 1) {
+      let start = alongStart + step * index + (step - expected) / 2;
+      if (index === 0) start = alongStart;
+      if (index === count - 1) start = alongEnd - expected;
+      start = clamp(start, alongStart, alongEnd - expected);
+      const rect = horizontal
+        ? { x: start, y: crossStart, w: expected, h: crossSize }
+        : { x: crossStart, y: start, w: crossSize, h: expected };
+      const adjusted = insetRect(rect, inset, analysis.width, analysis.height);
+      if (!isUsableFrame(adjusted, analysis)) continue;
+      rebuilt.push({ ...adjusted, stripIndex: 0 });
+    }
+    if (!rebuilt.length) return result;
+    return {
+      ...result,
+      frames: rebuilt,
+      stripCount: 1,
+      stripFrameCounts: [rebuilt.length],
+      edgeFrameCount: 0
+    };
+  }
+
   function runDetection(analysis, options) {
     const cropped = cropWhiteMargins(analysis);
-    const result = detectOnAnalysis(cropped.analysis, options);
+    let result = detectOnAnalysis(cropped.analysis, options);
+    result = refineFramesWithExplicitFormat(result, cropped.analysis, options);
     if (result && options && options.cropScope === "sprocket") {
       result.frames = expandFramesToFilmBorder(result.frames, cropped.analysis, options, result);
     }
