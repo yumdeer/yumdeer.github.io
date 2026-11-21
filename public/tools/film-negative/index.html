@@ -7,7 +7,7 @@
   <title>负片校正 - flowerdeer 小工具</title>
   <link rel="icon" type="image/png" href="/favicon.png?v=2">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2">
-  <link rel="stylesheet" href="styles.css?v=1.0.14">
+  <link rel="stylesheet" href="styles.css?v=1.0.16">
 </head>
 <body>
   <header class="topbar">
@@ -83,6 +83,7 @@
             <option value="original">原图格式</option>
           </select>
           <button id="btn-export-zip" class="ghost-btn" disabled>导出全部 ZIP</button>
+          <button id="btn-batch" class="ghost-btn" disabled>批量导出</button>
           <button id="btn-export" class="primary-btn" disabled>导出</button>
         </span>
       </div>
@@ -105,8 +106,8 @@
           <div id="sample-badge" class="sample-badge" hidden>点击画面中未曝光的片基区域</div>
           <div id="compare-overlay" class="compare-overlay" hidden>
             <canvas id="compare-before"></canvas>
-            <span class="compare-tag">简单反转</span>
-            <span class="compare-tag compare-tag-after">片基校正</span>
+            <span class="compare-tag">校正后</span>
+            <span class="compare-tag compare-tag-after">原片（负片）</span>
             <div id="compare-divider" class="compare-divider"><span class="compare-handle"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1c1b18" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5"></path></svg></span></div>
           </div>
           <div id="crop-overlay" class="crop-overlay" hidden>
@@ -180,6 +181,18 @@
       </div>
       <div class="card">
         <div class="card-head">
+          <h2>直方图</h2>
+          <div class="hist-legend">
+            <span><i class="dot dot-r"></i>R</span>
+            <span><i class="dot dot-g"></i>G</span>
+            <span><i class="dot dot-b"></i>B</span>
+            <span><i class="dot dot-l"></i>亮度</span>
+          </div>
+        </div>
+        <canvas id="hist" class="hist-canvas" aria-label="校正后图像的 RGB 与亮度直方图"></canvas>
+      </div>
+      <div class="card">
+        <div class="card-head">
           <h2>待处理队列</h2>
           <span class="card-note-inline"><span id="queue-count">0</span>/12 · 已编辑 <span id="queue-edited">0</span></span>
         </div>
@@ -224,6 +237,6 @@
   <script src="lib/pako.min.js"></script>
   <script src="lib/UTIF.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script src="app.js?v=1.1.2"></script>
+  <script src="app.js?v=1.1.6"></script>
 </body>
 </html>

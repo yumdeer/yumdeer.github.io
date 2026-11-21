@@ -7,7 +7,7 @@
   <title>自动曝光 / 白平衡 / 调色 - flowerdeer 小工具</title>
   <link rel="icon" type="image/png" href="/favicon.png?v=2">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2">
-  <link rel="stylesheet" href="styles.css?v=1.6.0">
+  <link rel="stylesheet" href="styles.css?v=1.7.0">
 </head>
 <body>
   <header class="topbar">
@@ -120,6 +120,9 @@
         <span class="stage-actions">
           <button id="btn-compare" class="ghost-btn" type="button" disabled>按住看原图</button>
           <button id="btn-split" class="ghost-btn" type="button" disabled>分屏对比</button>
+          <button id="btn-crop" class="ghost-btn" type="button" disabled>裁剪</button>
+          <button id="btn-zoom" class="ghost-btn" type="button" disabled>查看大图</button>
+          <button id="btn-reset-all" class="ghost-btn" type="button" disabled>重置</button>
           <button id="btn-reset-top" class="ghost-btn" type="button" disabled>重新自动分析</button>
         </span>
         <span class="stage-export">
@@ -145,7 +148,30 @@
         <div id="canvas-wrap" class="canvas-wrap" hidden>
           <canvas id="view-canvas" class="view-canvas"></canvas>
           <div id="split-line" class="split-line" hidden><span class="split-handle"></span></div>
+          <div id="crop-overlay" class="crop-overlay" hidden>
+            <div id="crop-box" class="crop-box" data-handle="move">
+              <span class="crop-handle" data-handle="nw"></span>
+              <span class="crop-handle" data-handle="ne"></span>
+              <span class="crop-handle" data-handle="sw"></span>
+              <span class="crop-handle" data-handle="se"></span>
+            </div>
+          </div>
         </div>
+      </div>
+
+      <div id="crop-bar" class="crop-bar" hidden>
+        <span class="crop-label">裁剪</span>
+        <select id="crop-ratio" class="format-select" aria-label="裁剪比例">
+          <option value="0">自由</option>
+          <option value="1">1:1</option>
+          <option value="1.3333">4:3</option>
+          <option value="1.5">3:2</option>
+          <option value="1.7778">16:9</option>
+        </select>
+        <button id="btn-crop-apply" class="ghost-btn mini" type="button">应用</button>
+        <button id="btn-crop-cancel" class="ghost-btn mini" type="button">取消</button>
+        <button id="btn-crop-reset" class="ghost-btn mini" type="button">取消裁剪</button>
+        <span class="crop-tip">拖动四角调整范围，框内可整体移动</span>
       </div>
 
       <div class="card hist-card">
@@ -283,6 +309,14 @@
     </aside>
   </main>
 
-  <script src="app.js?v=2.0.0"></script>
+  <div id="lightbox" class="lightbox" hidden>
+    <div class="lightbox-head">
+      <span id="lightbox-title"></span>
+      <button id="btn-lightbox-close" class="ghost-btn mini" type="button">关闭</button>
+    </div>
+    <div class="lightbox-body"><canvas id="lightbox-canvas"></canvas></div>
+  </div>
+
+  <script src="app.js?v=2.1.0"></script>
 </body>
 </html>

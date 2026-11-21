@@ -89,6 +89,10 @@
     split: false,
     splitRatio: 0.5,
     compareHold: false,
+    crop: null,
+    cropEditing: false,
+    cropRect: null,
+    cropRatio: 0,
     busy: false,
     queue: [],
     queueIndex: 0,
@@ -688,9 +692,20 @@
     });
   }
 
+  /* 当前裁剪区域（原图像素，编辑裁剪时视为未裁剪） */
+  function cropPx() {
+    if (!state.crop || state.cropEditing || !state.sourceW || !state.sourceH) return null;
+    const x = Math.round(state.crop.x * state.sourceW);
+    const y = Math.round(state.crop.y * state.sourceH);
+    const w = Math.max(1, Math.min(state.sourceW - x, Math.round(state.crop.w * state.sourceW)));
+    const h = Math.max(1, Math.min(state.sourceH - y, Math.round(state.crop.h * state.sourceH)));
+    return { x, y, w, h };
+  }
+
   function buildAnalysis() {
-    const w = state.sourceW;
-    const h = state.sourceH;
+    const rect = cropPx();
+    const w = rect ? rect.w : state.sourceW;
+    const h = rect ? rect.h : state.sourceH;
     const scale = Math.min(1, 720 / Math.max(w, h));
     const aw = Math.max(1, Math.round(w * scale));
     const ah = Math.max(1, Math.round(h * scale));
@@ -698,7 +713,7 @@
     c.width = aw;
     c.height = ah;
     const ctx = c.getContext('2d', { willReadFrequently: true });
-    ctx.drawImage(state.source, 0, 0, aw, ah);
+    ctx.drawImage(state.source, rect ? rect.x : 0, rect ? rect.y : 0, w, h, 0, 0, aw, ah);
     const img = ctx.getImageData(0, 0, aw, ah);
     state.analysis = { w: aw, h: ah, data: img.data };
     const luma = lumaHistogram(img.data, aw, ah, 1);
@@ -721,8 +736,9 @@
   }
 
   function buildPreview() {
-    const w = state.sourceW;
-    const h = state.sourceH;
+    const rect = cropPx();
+    const w = rect ? rect.w : state.sourceW;
+    const h = rect ? rect.h : state.sourceH;
     const scale = Math.min(1, 1500 / Math.max(w, h));
     const pw = Math.max(1, Math.round(w * scale));
     const ph = Math.max(1, Math.round(h * scale));
@@ -730,7 +746,7 @@
     c.width = pw;
     c.height = ph;
     const ctx = c.getContext('2d', { willReadFrequently: true });
-    ctx.drawImage(state.source, 0, 0, pw, ph);
+    ctx.drawImage(state.source, rect ? rect.x : 0, rect ? rect.y : 0, w, h, 0, 0, pw, ph);
     const img = ctx.getImageData(0, 0, pw, ph);
     state.preview = { w: pw, h: ph, data: img.data };
 
@@ -747,10 +763,11 @@
     view.height = ph;
     $('canvas-wrap').style.aspectRatio = pw + ' / ' + ph;
 
-    $('info-size').textContent = w + ' × ' + h;
+    $('info-size').textContent = state.sourceW + ' × ' + state.sourceH;
     $('info-preview').textContent = pw + ' × ' + ph;
     $('file-tag').textContent = '已载入';
-    $('file-name').textContent = state.name + ' · ' + (state.sourceW * state.sourceH / 1e6).toFixed(1) + ' MP';
+    $('file-name').textContent =
+      state.name + ' · ' + (state.sourceW * state.sourceH / 1e6).toFixed(1) + ' MP' + (state.crop ? ' · 已裁剪' : '');
   }
 
   /* ---------- 自动分析 ---------- */
@@ -1074,7 +1091,18 @@
       for (const item of state.queue) {
         btn.textContent = '处理中 ' + (done + 1) + '/' + state.queue.length;
         await new Promise((r) => setTimeout(r, 20));
-        const src = await decodeFile(item.file);
+        let src = await decodeFile(item.file);
+        if (state.crop) {
+          const rx = Math.round(state.crop.x * src.width);
+          const ry = Math.round(state.crop.y * src.height);
+          const rw = Math.max(1, Math.min(src.width - rx, Math.round(state.crop.w * src.width)));
+          const rh = Math.max(1, Math.min(src.height - ry, Math.round(state.crop.h * src.height)));
+          const cc = document.createElement('canvas');
+          cc.width = rw;
+          cc.height = rh;
+          cc.getContext('2d').drawImage(src, rx, ry, rw, rh, 0, 0, rw, rh);
+          src = cc;
+        }
         const w = src.width;
         const h = src.height;
         const analysis = analyzeSource(src, w, h);
@@ -1134,8 +1162,9 @@
     await new Promise((r) => setTimeout(r, 30));
 
     try {
-      const w = state.sourceW;
-      const h = state.sourceH;
+      const rect = cropPx();
+      const w = rect ? rect.w : state.sourceW;
+      const h = rect ? rect.h : state.sourceH;
       const c = document.createElement('canvas');
       c.width = w;
       c.height = h;
@@ -1145,7 +1174,7 @@
         ctx.fillStyle = '#fff';
         ctx.fillRect(0, 0, w, h);
       }
-      ctx.drawImage(state.source, 0, 0, w, h);
+      ctx.drawImage(state.source, rect ? rect.x : 0, rect ? rect.y : 0, w, h, 0, 0, w, h);
       const img = ctx.getImageData(0, 0, w, h);
       processPixels(img.data, img.data, w, h, state.settings, state.auto);
       ctx.putImageData(img, 0, 0);
@@ -1168,6 +1197,7 @@
   function setControlsEnabled(on) {
     [
       'btn-compare', 'btn-split', 'btn-reset', 'btn-reset-top',
+      'btn-crop', 'btn-zoom', 'btn-reset-all',
       'btn-export', 'export-format',
     ].forEach((id) => {
       $(id).disabled = !on;
@@ -1316,7 +1346,13 @@
       state.split = false;
       state.splitRatio = 0.5;
       state.compareHold = false;
+      state.crop = null;
+      state.cropEditing = false;
+      state.cropRect = null;
       $('btn-split').classList.remove('is-active');
+      $('crop-bar').hidden = true;
+      $('crop-overlay').hidden = true;
+      $('btn-crop').classList.remove('is-active');
       updateControls();
       buildAnalysis();
       buildPreview();
@@ -1331,6 +1367,195 @@
       $('file-tag').textContent = '读取失败';
       window.alert('无法读取这张图片，请换一张试试。');
     }
+  }
+
+  /* ---------- 裁剪 ---------- */
+
+  function clampCropRect(r) {
+    const w = Math.min(1, Math.max(0.1, r.w));
+    const h = Math.min(1, Math.max(0.1, r.h));
+    return {
+      x: Math.min(Math.max(0, r.x), 1 - w),
+      y: Math.min(Math.max(0, r.y), 1 - h),
+      w,
+      h,
+    };
+  }
+
+  function cropRatioNorm() {
+    if (!state.cropRatio || !state.preview) return 0;
+    return state.preview.w / (state.cropRatio * state.preview.h);
+  }
+
+  function fitCropRect(r) {
+    const ratio = cropRatioNorm();
+    if (!ratio) return clampCropRect(r);
+    let w = r.w;
+    let h = w / ratio;
+    if (h > 1) {
+      h = 1;
+      w = h * ratio;
+    }
+    const cx = r.x + r.w / 2;
+    const cy = r.y + r.h / 2;
+    return clampCropRect({ x: cx - w / 2, y: cy - h / 2, w, h });
+  }
+
+  function paintCropBox() {
+    const box = $('crop-box');
+    const r = state.cropRect;
+    if (!box || !r) return;
+    box.style.left = (r.x * 100).toFixed(2) + '%';
+    box.style.top = (r.y * 100).toFixed(2) + '%';
+    box.style.width = (r.w * 100).toFixed(2) + '%';
+    box.style.height = (r.h * 100).toFixed(2) + '%';
+  }
+
+  function beginCrop() {
+    if (!state.source || state.cropEditing) return;
+    state.cropEditing = true;
+    state.cropRect = state.crop ? { ...state.crop } : { x: 0.05, y: 0.05, w: 0.9, h: 0.9 };
+    state.cropRatio = Number($('crop-ratio').value) || 0;
+    if (state.cropRatio) state.cropRect = fitCropRect(state.cropRect);
+    if (state.split) {
+      state.split = false;
+      $('btn-split').classList.remove('is-active');
+      $('split-line').hidden = true;
+    }
+    $('crop-bar').hidden = false;
+    $('crop-overlay').hidden = false;
+    $('btn-crop').classList.add('is-active');
+    /* 进入裁剪先还原整图，便于重新框选 */
+    buildPreview();
+    render();
+    updateView();
+    paintCropBox();
+  }
+
+  function endCrop(apply) {
+    if (!state.cropEditing) return;
+    if (apply && state.cropRect) {
+      const r = state.cropRect;
+      const full = r.x < 0.002 && r.y < 0.002 && r.w > 0.996 && r.h > 0.996;
+      state.crop = full ? null : { x: r.x, y: r.y, w: r.w, h: r.h };
+    }
+    state.cropEditing = false;
+    state.cropRect = null;
+    $('crop-bar').hidden = true;
+    $('crop-overlay').hidden = true;
+    $('btn-crop').classList.remove('is-active');
+    if (!state.source) return;
+    /* 裁剪改变了画面分布，重新分析并刷新自动参数 */
+    state.settings.low = 0;
+    state.settings.high = 1;
+    buildAnalysis();
+    buildPreview();
+    runAuto();
+    updateView();
+  }
+
+  function resetCrop() {
+    state.crop = null;
+    state.cropEditing = false;
+    state.cropRect = null;
+    $('crop-bar').hidden = true;
+    $('crop-overlay').hidden = true;
+    $('btn-crop').classList.remove('is-active');
+    if (!state.source) return;
+    state.settings.low = 0;
+    state.settings.high = 1;
+    buildAnalysis();
+    buildPreview();
+    runAuto();
+    updateView();
+  }
+
+  function bindCropDrag() {
+    const overlay = $('crop-overlay');
+    let drag = null;
+    overlay.addEventListener('pointerdown', (e) => {
+      if (!state.cropEditing) return;
+      e.preventDefault();
+      const hit = e.target.closest('[data-handle]');
+      drag = {
+        handle: hit ? hit.dataset.handle : 'move',
+        start: { ...state.cropRect },
+        px: e.clientX,
+        py: e.clientY,
+        rw: overlay.clientWidth || 1,
+        rh: overlay.clientHeight || 1,
+      };
+      overlay.setPointerCapture(e.pointerId);
+    });
+    overlay.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      const dx = (e.clientX - drag.px) / drag.rw;
+      const dy = (e.clientY - drag.py) / drag.rh;
+      const st = drag.start;
+      let r;
+      if (drag.handle === 'move') {
+        r = { x: st.x + dx, y: st.y + dy, w: st.w, h: st.h };
+      } else {
+        let x = st.x;
+        let y = st.y;
+        let w = st.w;
+        let h = st.h;
+        if (drag.handle.indexOf('w') >= 0) {
+          const nx = Math.min(st.x + st.w - 0.05, Math.max(0, st.x + dx));
+          w = st.x + st.w - nx;
+          x = nx;
+        }
+        if (drag.handle.indexOf('e') >= 0) w = Math.min(1 - st.x, Math.max(0.05, st.w + dx));
+        if (drag.handle.indexOf('n') >= 0) {
+          const ny = Math.min(st.y + st.h - 0.05, Math.max(0, st.y + dy));
+          h = st.y + st.h - ny;
+          y = ny;
+        }
+        if (drag.handle.indexOf('s') >= 0) h = Math.min(1 - st.y, Math.max(0.05, st.h + dy));
+        r = { x, y, w, h };
+      }
+      state.cropRect = cropRatioNorm() ? fitCropRect(r) : clampCropRect(r);
+      paintCropBox();
+    });
+    ['pointerup', 'pointercancel'].forEach((ev) => {
+      overlay.addEventListener(ev, () => {
+        drag = null;
+      });
+    });
+  }
+
+  /* ---------- 大图查看 ---------- */
+
+  function openLightbox() {
+    if (!state.source) return;
+    const box = $('lightbox');
+    box.hidden = false;
+    $('lightbox-title').textContent = state.name + ' · 生成中…';
+    window.setTimeout(() => {
+      const rect = cropPx();
+      const w = rect ? rect.w : state.sourceW;
+      const h = rect ? rect.h : state.sourceH;
+      const c = $('lightbox-canvas');
+      c.width = w;
+      c.height = h;
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(state.source, rect ? rect.x : 0, rect ? rect.y : 0, w, h, 0, 0, w, h);
+      const img = ctx.getImageData(0, 0, w, h);
+      processPixels(img.data, img.data, w, h, state.settings, state.auto);
+      ctx.putImageData(img, 0, 0);
+      $('lightbox-title').textContent = state.name + ' · ' + w + ' × ' + h;
+    }, 30);
+  }
+
+  function closeLightbox() {
+    $('lightbox').hidden = true;
+  }
+
+  /* ---------- 一键重置（参数 + 裁剪） ---------- */
+
+  function resetAll() {
+    resetSettings();
+    resetCrop();
   }
 
   /* ---------- 事件绑定 ---------- */
@@ -1376,6 +1601,36 @@
       const files = e.dataTransfer && e.dataTransfer.files;
       if (files && files.length) setQueue(files);
     });
+
+    $('btn-crop').addEventListener('click', () => {
+      if (state.cropEditing) endCrop(false);
+      else beginCrop();
+    });
+    $('btn-crop-apply').addEventListener('click', () => endCrop(true));
+    $('btn-crop-cancel').addEventListener('click', () => endCrop(false));
+    $('btn-crop-reset').addEventListener('click', resetCrop);
+    $('crop-ratio').addEventListener('change', (e) => {
+      state.cropRatio = Number(e.target.value) || 0;
+      if (state.cropEditing && state.cropRatio) {
+        state.cropRect = fitCropRect(state.cropRect);
+        paintCropBox();
+      }
+    });
+    $('btn-zoom').addEventListener('click', openLightbox);
+    $('btn-reset-all').addEventListener('click', resetAll);
+    $('btn-lightbox-close').addEventListener('click', closeLightbox);
+    $('lightbox').addEventListener('click', (e) => {
+      if (e.target === $('lightbox')) closeLightbox();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      if (!$('lightbox').hidden) {
+        closeLightbox();
+      } else if (state.cropEditing) {
+        endCrop(false);
+      }
+    });
+    bindCropDrag();
 
     $('wb-enabled').addEventListener('change', (e) => {
       state.settings.wbEnabled = e.target.checked;

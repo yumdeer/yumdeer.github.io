@@ -448,6 +448,88 @@
     return h.luma;
   }
 
+  // ---- 直方图面板：校正后的 RGB 与亮度分布 ----
+  var histCtx = null;
+  function drawHistogram(hist) {
+    var cnv = el.hist;
+    if (!cnv || !hist) return;
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    var rect = cnv.getBoundingClientRect();
+    if (!rect.width) return;
+    var cw = Math.max(200, Math.round(rect.width));
+    var ch = Math.max(80, Math.round(rect.height || 132));
+    var pxW = Math.round(cw * dpr);
+    var pxH = Math.round(ch * dpr);
+    if (cnv.width !== pxW || cnv.height !== pxH) {
+      cnv.width = pxW;
+      cnv.height = pxH;
+    }
+    if (!histCtx) histCtx = cnv.getContext("2d");
+    var ctx = histCtx;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cw, ch);
+
+    var padTop = 8;
+    var padBottom = 8;
+    var plotH = ch - padTop - padBottom;
+    var plotW = cw;
+
+    // 参考高度用 98% 分位，避免大面积片基/白边形成的高峰把其余分布压扁
+    var ref = 0;
+    var vals = [];
+    var series = [hist.r, hist.g, hist.b, hist.luma];
+    for (var k = 0; k < series.length; k++) {
+      for (var i = 0; i < 256; i++) if (series[k][i] > 0) vals.push(series[k][i]);
+    }
+    if (vals.length) {
+      vals.sort(function (a, b) { return a - b; });
+      ref = vals[Math.floor((vals.length - 1) * 0.98)] || vals[vals.length - 1];
+    }
+    if (!ref) ref = 1;
+
+    ctx.strokeStyle = "rgba(255,255,255,0.10)";
+    ctx.lineWidth = 1;
+    for (var g = 1; g < 4; g++) {
+      var gx = (plotW * g) / 4;
+      ctx.beginPath();
+      ctx.moveTo(gx, padTop);
+      ctx.lineTo(gx, ch - padBottom);
+      ctx.stroke();
+    }
+
+    function plot(data, color, alpha, fill) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(0, ch - padBottom);
+      for (var i = 0; i < 256; i++) {
+        var v = Math.min(1, data[i] / ref);
+        var hgt = Math.sqrt(v) * plotH;
+        var x = (i / 255) * plotW;
+        ctx.lineTo(x, ch - padBottom - hgt);
+      }
+      ctx.lineTo(plotW, ch - padBottom);
+      ctx.closePath();
+      if (fill) {
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = color;
+        ctx.fill();
+      } else {
+        ctx.globalAlpha = alpha;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    ctx.globalCompositeOperation = "lighter";
+    plot(hist.r, "#d9534f", 0.42, true);
+    plot(hist.g, "#4f9d69", 0.42, true);
+    plot(hist.b, "#4d7fd0", 0.42, true);
+    ctx.globalCompositeOperation = "source-over";
+    plot(hist.luma, "#e8e6e1", 0.8, false);
+  }
+
   function drawCurve() {
     if (!el.curveCanvas || !state.curve) return;
     var cnv = el.curveCanvas;
@@ -816,6 +898,7 @@
     queueCount: document.getElementById("queue-count"),
     btnCompareSplit: document.getElementById("btn-compare-split"),
     btnExportZip: document.getElementById("btn-export-zip"),
+    btnBatch: document.getElementById("btn-batch"),
     btnApplyAdjAll: document.getElementById("btn-apply-adj-all"),
     btnApplyBaseAll: document.getElementById("btn-apply-base-all"),
     btnResetAll: document.getElementById("btn-reset-all"),
@@ -823,6 +906,7 @@
     btnImportParams: document.getElementById("btn-import-params"),
     btnResetAdj: document.getElementById("btn-reset-adj"),
     curveCanvas: document.getElementById("curve-canvas"),
+    hist: document.getElementById("hist"),
     curveChannel: document.getElementById("curve-channel"),
     curveIn: document.getElementById("curve-in"),
     curveOut: document.getElementById("curve-out"),
@@ -1083,6 +1167,7 @@
     state.curveHist = hist;
     blitPreview(state.renderBuf);
     drawCurve();
+    drawHistogram(hist);
     state.rendering = false;
     if (state.pendingRender) {
       state.pendingRender = false;
@@ -1317,7 +1402,7 @@
     [el.btnCompare, el.btnCompareSplit, el.btnZoom, el.btnReset, el.btnExport, el.btnAutoBase,
      el.btnManualBase, el.btnExportParams, el.btnImportParams, el.btnResetAdj, el.btnCurveReset, el.btnApplyAdjAll,
      el.btnApplyAdjUnproc, el.btnApplyBaseUnproc, el.btnImportParamsQueue, el.btnApplyBaseAll,
-     el.btnEditComp, el.btnResetAll, el.btnExportZip, el.btnCrop, el.btnExportDir].forEach(function (b) {
+     el.btnEditComp, el.btnResetAll, el.btnExportZip, el.btnBatch, el.btnCrop, el.btnExportDir].forEach(function (b) {
       if (b) b.disabled = true;
     });
     if (el.exportFormat) el.exportFormat.disabled = true;
@@ -1411,7 +1496,7 @@
       updateInputPanel();
       renderToneHint();
       doRender();
-      // 默认开启对比模式：直观展示「简单反转 vs 片基校正」；正片直通没有反转意义，保持关闭
+      // 默认开启对比模式：左边校正结果、右边原片负片；正片直通没有反转意义，保持关闭
       state.splitOn = !state.positive;
       el.btnCompareSplit.classList.toggle("is-active", state.splitOn);
       el.btnCompareSplit.textContent = state.splitOn ? "关闭对比" : "对比模式";
@@ -1505,6 +1590,7 @@
     if (el.queueEdited) el.queueEdited.textContent = String(editedCount);
     var multi = state.queue.length >= 2;
     if (el.btnExportZip) el.btnExportZip.disabled = !multi;
+    if (el.btnBatch) el.btnBatch.disabled = !multi;
     if (el.btnApplyAdjAll) el.btnApplyAdjAll.disabled = !multi || !state.previewData;
     if (el.btnApplyAdjUnproc) el.btnApplyAdjUnproc.disabled = !multi || !state.previewData;
     if (el.btnApplyBaseAll) el.btnApplyBaseAll.disabled = !multi || !state.previewData;
@@ -2032,7 +2118,7 @@
     if (fs && fs.length) addFiles(fs);
   });
 
-  // ---- 滑块对比：左「简单反转」右「片基校正」 ----
+  // ---- 滑块对比：左「校正后」右「原片（负片）」 ----
   function syncCompareBox() {
     if (!el.compareOverlay || el.compareOverlay.hidden || !state.previewData) return;
     var cv = el.canvas;
@@ -2045,10 +2131,12 @@
   function applySplit() {
     if (!el.compareDivider) return;
     var x = state.splitX * 100;
-    el.compareBefore.style.clipPath = "inset(0 " + (100 - x).toFixed(3) + "% 0 0)";
+    // 原片图层保留分割线右侧，左侧露出校正后的主画布
+    el.compareBefore.style.clipPath = "inset(0 0 0 " + x.toFixed(3) + "%)";
     el.compareDivider.style.left = x.toFixed(3) + "%";
   }
 
+  // 对比右半边显示载入的原始文件（真实负片），左半边为校正结果
   function rebuildCompareBefore() {
     if (!state.previewData || !el.compareBefore) return;
     var c = el.compareBefore;
@@ -2058,24 +2146,9 @@
     if (c.width !== w) c.width = w;
     if (c.height !== h) c.height = h;
     var ctx = c.getContext("2d");
-    var out = ctx.createImageData(state.previewW, state.previewH);
-    var s = state.previewData.data, d = out.data;
-    for (var i = 0; i < s.length; i += 4) {
-      d[i] = 255 - s[i];
-      d[i + 1] = 255 - s[i + 1];
-      d[i + 2] = 255 - s[i + 2];
-      d[i + 3] = s[i + 3];
-    }
-    if (rect) {
-      var tmp = document.createElement("canvas");
-      tmp.width = state.previewW;
-      tmp.height = state.previewH;
-      tmp.getContext("2d").putImageData(out, 0, 0);
-      ctx.clearRect(0, 0, w, h);
-      ctx.drawImage(tmp, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h);
-    } else {
-      ctx.putImageData(out, 0, 0);
-    }
+    ctx.clearRect(0, 0, w, h);
+    if (rect) ctx.putImageData(state.previewData, -rect.x, -rect.y);
+    else ctx.putImageData(state.previewData, 0, 0);
     syncCompareBox();
     applySplit();
   }
@@ -2240,6 +2313,7 @@
   window.addEventListener("resize", function () {
     syncCompareBox();
     syncCropBox();
+    if (state.curveHist) drawHistogram(state.curveHist);
   });
 
   // ---- 单图参数 JSON 导入 / 导出 ----
@@ -2626,6 +2700,16 @@
     }
 
     next();
+  }
+
+  // 顶栏「批量导出」按当前输出方式分流，和 auto-tone 的批量按钮保持一致
+  if (el.btnBatch) {
+    el.btnBatch.addEventListener("click", function () {
+      var modeEl = document.querySelector('input[name="output-mode"]:checked');
+      var mode = modeEl ? modeEl.value : "folder";
+      if (mode === "folder" && el.btnExportDir) el.btnExportDir.click();
+      else if (el.btnExportZip) el.btnExportZip.click();
+    });
   }
 
   el.btnExportZip.addEventListener("click", function () {
