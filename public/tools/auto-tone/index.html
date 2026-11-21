@@ -128,8 +128,12 @@
         <span class="stage-export">
           <button id="btn-batch" class="ghost-btn" type="button" disabled title="选择保存文件夹后，按当前白平衡算法与调整参数批量处理队列内所有图片；浏览器不支持时改为逐张下载">批量导出</button>
           <select id="export-format" class="format-select" aria-label="导出格式" disabled>
+            <option value="original" selected>跟随原图（各自格式）</option>
             <option value="image/jpeg">JPEG</option>
             <option value="image/png">PNG</option>
+            <option value="image/webp">WEBP</option>
+            <option value="image/bmp">BMP</option>
+            <option value="image/tiff">TIFF</option>
           </select>
           <button id="btn-export" class="primary-btn" type="button" disabled>导出图片</button>
         </span>
@@ -318,6 +322,6 @@
   </div>
 
   <script src="lib/UTIF.js"></script>
-  <script src="app.js?v=2.1.1"></script>
+  <script src="app.js?v=2.2.1"></script>
 </body>
 </html>

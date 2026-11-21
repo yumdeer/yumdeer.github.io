@@ -1080,6 +1080,85 @@
     setTimeout(() => URL.revokeObjectURL(url), 4000);
   }
 
+  /* 导出格式与 film-autoclip 保持一致：跟随原图 / JPEG / PNG / WEBP / BMP / TIFF */
+  const EXPORT_FORMATS = {
+    'image/jpeg': { ext: 'jpg', mime: 'image/jpeg' },
+    'image/png': { ext: 'png', mime: 'image/png' },
+    'image/webp': { ext: 'webp', mime: 'image/webp' },
+    'image/bmp': { ext: 'bmp', mime: 'image/bmp', isBmp: true },
+    'image/tiff': { ext: 'tif', mime: 'image/tiff', isTiff: true },
+  };
+
+  function sourceFormatFrom(file) {
+    const name = ((file && file.name) || state.name || '').toLowerCase();
+    const type = ((file && file.type) || '').toLowerCase();
+    const ext = name.includes('.') ? name.split('.').pop() : '';
+    if (type === 'image/png' || ext === 'png') return EXPORT_FORMATS['image/png'];
+    if (type === 'image/webp' || ext === 'webp') return EXPORT_FORMATS['image/webp'];
+    if (['image/bmp', 'image/x-bmp', 'image/x-ms-bmp'].includes(type) || ext === 'bmp') {
+      return EXPORT_FORMATS['image/bmp'];
+    }
+    if (type === 'image/tiff' || ext === 'tif' || ext === 'tiff') return EXPORT_FORMATS['image/tiff'];
+    return EXPORT_FORMATS['image/jpeg'];
+  }
+
+  function resolveExportFormat(choice, file) {
+    return choice === 'original' ? sourceFormatFrom(file) : (EXPORT_FORMATS[choice] || EXPORT_FORMATS['image/jpeg']);
+  }
+
+  function encodeBmpCanvas(canvas) {
+    const width = canvas.width;
+    const height = canvas.height;
+    const rowStride = Math.ceil((width * 3) / 4) * 4;
+    const pixelBytes = rowStride * height;
+    const headerBytes = 54;
+    const fileSize = headerBytes + pixelBytes;
+    if (!width || !height || !Number.isSafeInteger(fileSize) || fileSize > 0xffffffff) {
+      throw new Error('BMP 输出尺寸过大');
+    }
+    const rgba = canvas.getContext('2d').getImageData(0, 0, width, height).data;
+    const output = new Uint8Array(fileSize);
+    const view = new DataView(output.buffer);
+    output[0] = 0x42;
+    output[1] = 0x4d;
+    view.setUint32(2, fileSize, true);
+    view.setUint32(10, headerBytes, true);
+    view.setUint32(14, 40, true);
+    view.setInt32(18, width, true);
+    view.setInt32(22, height, true);
+    view.setUint16(26, 1, true);
+    view.setUint16(28, 24, true);
+    view.setUint32(34, pixelBytes, true);
+    view.setInt32(38, 2835, true);
+    view.setInt32(42, 2835, true);
+    for (let outputY = 0; outputY < height; outputY += 1) {
+      const sourceY = height - outputY - 1;
+      const rowOffset = headerBytes + outputY * rowStride;
+      for (let x = 0; x < width; x += 1) {
+        const sourceOffset = (sourceY * width + x) * 4;
+        const targetOffset = rowOffset + x * 3;
+        output[targetOffset] = rgba[sourceOffset + 2];
+        output[targetOffset + 1] = rgba[sourceOffset + 1];
+        output[targetOffset + 2] = rgba[sourceOffset];
+      }
+    }
+    return new Blob([output], { type: 'image/bmp' });
+  }
+
+  function encodeCanvas(canvas, format) {
+    if (format.isBmp) return Promise.resolve(encodeBmpCanvas(canvas));
+    if (format.isTiff) {
+      try {
+        if (typeof UTIF === 'undefined') throw new Error('TIFF 编码器不可用');
+        const rgba = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+        return Promise.resolve(new Blob([UTIF.encodeImage(rgba, canvas.width, canvas.height)], { type: 'image/tiff' }));
+      } catch (error) {
+        return Promise.reject(error);
+      }
+    }
+    return new Promise((resolve) => canvas.toBlob(resolve, format.mime, 0.92));
+  }
+
   function syncBatchButton() {
     const btn = $('btn-batch');
     if (!btn) return;
@@ -1119,8 +1198,7 @@
     state.busy = true;
     const btn = $('btn-batch');
     btn.disabled = true;
-    const type = $('export-format').value;
-    const ext = type === 'image/png' ? 'png' : 'jpg';
+    const choice = $('export-format').value;
     const template = JSON.parse(JSON.stringify(state.settings));
     let done = 0;
     try {
@@ -1158,11 +1236,12 @@
           median: levels.median,
         };
 
+        const format = resolveExportFormat(choice, item.file);
         const c = document.createElement('canvas');
         c.width = w;
         c.height = h;
         const ctx = c.getContext('2d', { willReadFrequently: true });
-        if (type === 'image/jpeg') {
+        if (format.mime === 'image/jpeg' || format.isBmp) {
           ctx.fillStyle = '#fff';
           ctx.fillRect(0, 0, w, h);
         }
@@ -1171,9 +1250,9 @@
         processPixels(img.data, img.data, w, h, s, auto);
         ctx.putImageData(img, 0, 0);
 
-        const blob = await new Promise((r) => c.toBlob(r, type, 0.92));
+        const blob = await encodeCanvas(c, format);
         if (!blob) throw new Error(item.file.name + ' 编码失败');
-        const outName = baseName(item.file.name) + '-auto.' + ext;
+        const outName = baseName(item.file.name) + '-auto.' + format.ext;
         if (dir) await writeToDir(dir, outName, blob);
         else downloadBlob(blob, outName);
         done++;
@@ -1201,12 +1280,12 @@
       const rect = cropPx();
       const w = rect ? rect.w : state.sourceW;
       const h = rect ? rect.h : state.sourceH;
+      const format = resolveExportFormat($('export-format').value, state.file);
       const c = document.createElement('canvas');
       c.width = w;
       c.height = h;
       const ctx = c.getContext('2d', { willReadFrequently: true });
-      const type = $('export-format').value;
-      if (type === 'image/jpeg') {
+      if (format.mime === 'image/jpeg' || format.isBmp) {
         ctx.fillStyle = '#fff';
         ctx.fillRect(0, 0, w, h);
       }
@@ -1215,9 +1294,9 @@
       processPixels(img.data, img.data, w, h, state.settings, state.auto);
       ctx.putImageData(img, 0, 0);
 
-      const blob = await new Promise((resolve) => c.toBlob(resolve, type, 0.92));
-      if (!blob) throw new Error('toBlob failed');
-      downloadBlob(blob, baseName(state.name) + '-auto.' + (type === 'image/png' ? 'png' : 'jpg'));
+      const blob = await encodeCanvas(c, format);
+      if (!blob) throw new Error('编码失败');
+      downloadBlob(blob, baseName(state.name) + '-auto.' + format.ext);
     } catch (e) {
       window.alert('导出失败：' + (e && e.message ? e.message : e));
     } finally {
@@ -1324,11 +1403,54 @@
   function setQueue(files) {
     const list = Array.from(files || []).filter((f) => f && (!f.type || /^image\//.test(f.type)));
     if (!list.length) return;
-    state.queue.forEach((item) => URL.revokeObjectURL(item.url));
+    state.queue.forEach((item) => {
+      if (item.url && item.url.startsWith('blob:')) URL.revokeObjectURL(item.url);
+    });
     state.queue = list.map((file) => ({ file, url: URL.createObjectURL(file) }));
     state.queueIndex = 0;
     renderQueue();
-    loadFile(state.queue[0].file);
+    loadFile(state.queue[0].file).then(() => buildQueueThumbnails(state.queue));
+  }
+
+  /* 浏览器原生无法显示 TIFF，队列缩略图需要走统一解码器。
+     串行生成，避免批量导入大图时同时解码造成内存飙升。 */
+  function needsDecodedThumbnail(file) {
+    const name = ((file && file.name) || '').toLowerCase();
+    const type = ((file && file.type) || '').toLowerCase();
+    return type === 'image/tiff' || name.endsWith('.tif') || name.endsWith('.tiff');
+  }
+
+  async function buildQueueThumbnails(items) {
+    for (const item of items) {
+      if (!needsDecodedThumbnail(item.file)) continue;
+      if (!state.queue.includes(item)) return;
+      try {
+        /* 当前正在预览的图片直接复用已解码位图，避免重复解码大文件 */
+        const reused = item.file === state.file && state.source;
+        const src = reused ? state.source : await decodeFile(item.file);
+        const sw = src.width || 1;
+        const sh = src.height || 1;
+        const scale = Math.min(1, 160 / Math.max(sw, sh));
+        const w = Math.max(1, Math.round(sw * scale));
+        const h = Math.max(1, Math.round(sh * scale));
+        const cnv = document.createElement('canvas');
+        cnv.width = w;
+        cnv.height = h;
+        cnv.getContext('2d').drawImage(src, 0, 0, w, h);
+        if (!reused && typeof src.close === 'function') src.close();
+        if (!state.queue.includes(item)) return;
+        if (item.url && item.url.startsWith('blob:')) URL.revokeObjectURL(item.url);
+        item.url = cnv.toDataURL('image/jpeg', 0.82);
+        const box = $('file-queue');
+        const index = state.queue.indexOf(item);
+        const img = index >= 0 && box && box.children[index]
+          ? box.children[index].querySelector('img')
+          : null;
+        if (img) img.src = item.url;
+      } catch (e) {
+        /* 解码失败时保留原占位，不影响其他图片 */
+      }
+    }
   }
 
   function renderQueue() {
@@ -1373,6 +1495,7 @@
       state.sourceW = w;
       state.sourceH = h;
       state.name = file.name || 'image';
+      state.file = file;
 
       /* 切换图片时保留白平衡算法、曝光目标与调色参数，
          让同一套设置统一作用于队列内的每张图片 */
