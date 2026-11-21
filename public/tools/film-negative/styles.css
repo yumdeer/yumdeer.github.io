@@ -424,19 +424,23 @@ button:disabled {
 }
 
 /* ---- 多图队列条 ---- */
+/* 队列缩略图放在右侧面板，三列网格展示，避免占用舞台底部空间 */
 .queue-bar {
-  display: flex;
-  gap: 8px;
-  padding: 10px 2px 0;
-  overflow-x: auto;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 2px;
+  max-height: 300px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   scrollbar-width: thin;
 }
 
 .qcard {
   position: relative;
-  flex: 0 0 auto;
-  width: 68px;
-  height: 68px;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
   border-radius: 6px;
   border: 2px solid var(--line);
   overflow: hidden;
@@ -527,9 +531,9 @@ button:disabled {
 }
 
 .qadd {
-  flex: 0 0 auto;
-  width: 68px;
-  height: 68px;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
   border: 2px dashed var(--line);
   border-radius: 6px;
   background: transparent;

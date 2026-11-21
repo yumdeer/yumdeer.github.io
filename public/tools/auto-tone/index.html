@@ -51,7 +51,7 @@
             <option value="grayworld">灰度世界 Gray World</option>
             <option value="whitepatch">白点 White Patch</option>
             <option value="shades">Shades of Gray (p=6)</option>
-            <option value="adaptive">自适应白点检测</option>
+            <option value="adaptive" selected>自适应白点检测</option>
           </select>
         </label>
         <label class="field" for="wb-strength">强度
@@ -63,7 +63,7 @@
           <span class="gain"><i class="dot dot-g"></i>G <b id="gain-g">1.00</b></span>
           <span class="gain"><i class="dot dot-b"></i>B <b id="gain-b">1.00</b></span>
         </div>
-        <p id="wb-note" class="card-note">灰度世界假设整幅画面的平均反射是中性灰，适合色彩分布均匀的照片。</p>
+        <p id="wb-note" class="card-note">自适应算法只统计高亮且低饱和的像素来估计白点，对大面积单色场景更稳。</p>
       </div>
 
       <div class="card">
@@ -322,6 +322,6 @@
   </div>
 
   <script src="lib/UTIF.js"></script>
-  <script src="app.js?v=2.2.1"></script>
+  <script src="app.js?v=2.2.2"></script>
 </body>
 </html>

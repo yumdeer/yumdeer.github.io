@@ -23,7 +23,8 @@
 
   const DEFAULTS = {
     wbEnabled: true,
-    wbMethod: 'grayworld',
+    /* 默认使用自适应白点检测：只统计高亮低饱和像素，对大面积单色/偏色场景更稳 */
+    wbMethod: 'adaptive',
     wbStrength: 1,
     expEnabled: true,
     target: 0.18,

@@ -1514,7 +1514,7 @@
   function renderQueue() {
     var bar = el.queueBar;
     if (!bar) return;
-    var keepScroll = bar.scrollLeft;
+    var keepScroll = bar.scrollTop;
     bar.hidden = state.queue.length === 0;
     bar.innerHTML = "";
     state.queue.forEach(function (item, i) {
@@ -1583,7 +1583,7 @@
       add.addEventListener("click", function () { el.fileInput.click(); });
       bar.appendChild(add);
     }
-    bar.scrollLeft = keepScroll;
+    bar.scrollTop = keepScroll;
     if (el.queueCount) el.queueCount.textContent = String(state.queue.length);
     var editedCount = 0;
     state.queue.forEach(function (q) { if (q.edited) editedCount += 1; });
