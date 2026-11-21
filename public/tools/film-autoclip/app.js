@@ -60,6 +60,7 @@
     selectedCount: $("#selectedCount"),
     formatSummary: $("#formatSummary"),
     qualityControl: $("#qualityControl"),
+    exportFormat: $("#exportFormat"),
     exportQuality: $("#exportQuality"),
     exportButton: $("#exportButton"),
     exportButtonLabel: $("#exportButtonLabel"),
@@ -105,6 +106,12 @@
   const frameHistoryLimit = 50;
 
   function bindEvents() {
+    els.exportFormat?.addEventListener("change", () => {
+      const job = getActiveJob();
+      if (job?.meta) updateSourceMeta(job);
+      updateExportState();
+    });
+
     els.fileInput.addEventListener("change", (event) => {
       const files = Array.from(event.target.files || []);
       if (files.length) void addFiles(files);
@@ -230,7 +237,8 @@
       status: "pending",
       error: null,
       meta: null,
-      detection: null
+      detection: null,
+      thumb: null
     };
   }
 
@@ -388,6 +396,7 @@
     };
     els.sourceName.textContent = job.file.name;
     els.sourceRotationLabel.value = `${state.sourceViewRotation}°`;
+    captureJobThumbnail(job);
     updateSourceMeta(job);
     prepareAnalysisCanvas();
     if (render) {
@@ -416,18 +425,33 @@
     }
   }
 
+  function resolveExportFormat() {
+    const value = els.exportFormat?.value || "original";
+    if (value === "original") return null;
+    const format = formatMap[value];
+    return format ? { ...format } : null;
+  }
+
   function updateSourceMeta(job) {
     const pageNote = job.meta.pageCount > 1 ? ` · ${job.meta.pageCount} 页（处理首帧）` : "";
     const bitDepthNote = job.format.isTiff && job.meta.bitDepth ? ` · ${job.meta.bitDepth}-bit` : "";
     els.imageMeta.innerHTML = `${job.meta.width} × ${job.meta.height} PX<br>${job.format.label}${bitDepthNote}${pageNote} · ${formatBytes(job.file.size)}`;
     const formats = new Set(state.jobs.map((item) => item.format.label));
-    els.formatSummary.textContent = state.jobs.length > 1
-      ? `${state.jobs.length} 张底片 · 保持各自原格式与裁切精度`
-      : (job.format.isTiff && job.meta.bitDepth
-        ? `保持 TIFF ${job.meta.bitDepth}-bit 样本 · 应用预览旋转`
-        : `保持 ${job.format.label} 格式 · 应用预览旋转`);
-    els.qualityControl.hidden = !state.jobs.some((item) => ["image/jpeg", "image/webp"].includes(item.format.mime));
-    els.formatSummary.title = formats.size > 1 ? `包含 ${Array.from(formats).join(" / ")}` : "";
+    const target = resolveExportFormat();
+    if (target) {
+      els.formatSummary.textContent = `统一导出为 ${target.label}`;
+      els.formatSummary.title = "";
+    } else {
+      els.formatSummary.textContent = state.jobs.length > 1
+        ? `${state.jobs.length} 张底片 · 保持各自原格式与裁切精度`
+        : (job.format.isTiff && job.meta.bitDepth
+          ? `保持 TIFF ${job.meta.bitDepth}-bit 样本 · 应用预览旋转`
+          : `保持 ${job.format.label} 格式 · 应用预览旋转`);
+      els.formatSummary.title = formats.size > 1 ? `包含 ${Array.from(formats).join(" / ")}` : "";
+    }
+    els.qualityControl.hidden = !(target
+      ? ["image/jpeg", "image/webp"].includes(target.mime)
+      : state.jobs.some((item) => ["image/jpeg", "image/webp"].includes(item.format.mime)));
   }
 
   function decodeImage(url) {
@@ -437,6 +461,83 @@
       image.onerror = reject;
       image.src = url;
     });
+  }
+
+  let adobeDecodeLut = null;
+  let srgbEncodeLut = null;
+
+  function getAdobeSrgbLuts() {
+    if (!adobeDecodeLut) {
+      adobeDecodeLut = new Float32Array(256);
+      for (let value = 0; value < 256; value += 1) {
+        adobeDecodeLut[value] = Math.pow(value / 255, 2.19921875);
+      }
+      srgbEncodeLut = new Uint8ClampedArray(4097);
+      for (let index = 0; index <= 4096; index += 1) {
+        const linear = index / 4096;
+        const encoded = linear <= 0.0031308 ? 12.92 * linear : 1.055 * Math.pow(linear, 1 / 2.4) - 0.055;
+        srgbEncodeLut[index] = Math.round(encoded * 255);
+      }
+    }
+    return { decode: adobeDecodeLut, encode: srgbEncodeLut };
+  }
+
+  // Adobe RGB (1998) -> sRGB：与浏览器对 JPEG 内嵌 ICC 的色彩管理保持一致
+  function applyAdobeRgbToSrgb(rgba) {
+    const { decode, encode } = getAdobeSrgbLuts();
+    for (let offset = 0; offset < rgba.length; offset += 4) {
+      const red = decode[rgba[offset]];
+      const green = decode[rgba[offset + 1]];
+      const blue = decode[rgba[offset + 2]];
+      let convertedRed = 1.3982831 * red - 0.398283 * green;
+      let convertedBlue = -0.0429383 * green + 1.0429383 * blue;
+      convertedRed = convertedRed <= 0 ? 0 : convertedRed >= 1 ? 1 : convertedRed;
+      convertedBlue = convertedBlue <= 0 ? 0 : convertedBlue >= 1 ? 1 : convertedBlue;
+      rgba[offset] = encode[(convertedRed * 4096 + 0.5) | 0];
+      rgba[offset + 1] = encode[(green * 4096 + 0.5) | 0];
+      rgba[offset + 2] = encode[(convertedBlue * 4096 + 0.5) | 0];
+    }
+  }
+
+  function readIccDescription(profile) {
+    if (!profile || profile.length < 132) return "";
+    const view = new DataView(profile.buffer, profile.byteOffset, profile.byteLength);
+    const tableCount = view.getUint32(128);
+    for (let index = 0; index < tableCount; index += 1) {
+      const base = 132 + index * 12;
+      if (base + 12 > profile.length) break;
+      const signature = String.fromCharCode(profile[base], profile[base + 1], profile[base + 2], profile[base + 3]);
+      if (signature !== "desc") continue;
+      const offset = view.getUint32(base + 4);
+      if (offset + 12 > profile.length) continue;
+      const type = String.fromCharCode(profile[offset], profile[offset + 1], profile[offset + 2], profile[offset + 3]);
+      if (type === "desc") {
+        const length = view.getUint32(offset + 8);
+        const end = Math.min(profile.length, offset + 12 + Math.max(0, length - 1));
+        return String.fromCharCode(...profile.subarray(offset + 12, end));
+      }
+      if (type === "mluc") {
+        const recordCount = view.getUint32(offset + 8);
+        if (!recordCount) continue;
+        const recordLength = view.getUint32(offset + 20);
+        const recordOffset = view.getUint32(offset + 24);
+        const end = Math.min(profile.length, offset + recordOffset + recordLength);
+        try {
+          return new TextDecoder("utf-16be").decode(profile.subarray(offset + recordOffset, end));
+        } catch {
+          return "";
+        }
+      }
+    }
+    return "";
+  }
+
+  function applyTiffIccProfile(rgba, entries) {
+    const iccEntry = entries?.find((entry) => entry.tag === 34675);
+    if (!iccEntry?.data?.length) return;
+    const description = readIccDescription(iccEntry.data).toLowerCase();
+    if (!description.includes("adobe rgb")) return;
+    applyAdobeRgbToSrgb(rgba);
   }
 
   async function decodeTiffFile(file) {
@@ -452,6 +553,7 @@
     if (!width || !height) throw new Error("TIFF dimensions are invalid");
     state.tiffSource = createTiffSource(ifds[0], directory);
     const rgba = UTIF.toRGBA8(ifds[0]);
+    applyTiffIccProfile(rgba, directory.entries);
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
@@ -1563,6 +1665,33 @@
 
   // 保留片边模式：把每个画格沿片条宽度方向扩到整条胶片，露出齿孔与片边，
   // 同时统一各画格输出尺寸，避免成片大小不一。
+  function getFramesLayoutAxis(frames) {
+    let spreadX = 0;
+    let spreadY = 0;
+    for (let i = 0; i < frames.length; i += 1) {
+      for (let j = i + 1; j < frames.length; j += 1) {
+        const first = frames[i];
+        const second = frames[j];
+        spreadX = Math.max(spreadX, Math.abs((first.x + first.w / 2) - (second.x + second.w / 2)));
+        spreadY = Math.max(spreadY, Math.abs((first.y + first.h / 2) - (second.y + second.h / 2)));
+      }
+    }
+    return spreadX >= spreadY ? "horizontal" : "vertical";
+  }
+
+  function getMinFrameStep(frames, axis) {
+    if (frames.length < 2) return 0;
+    const centers = frames
+      .map((frame) => (axis === "horizontal" ? frame.x + frame.w / 2 : frame.y + frame.h / 2))
+      .sort((a, b) => a - b);
+    let step = Infinity;
+    for (let index = 1; index < centers.length; index += 1) {
+      const delta = centers[index] - centers[index - 1];
+      if (delta > 1) step = Math.min(step, delta);
+    }
+    return Number.isFinite(step) ? Math.floor(step) : 0;
+  }
+
   function expandFramesToFilmBorder(frames, analysis, options, result) {
     if (!frames.length) return frames;
     const format = FILM_FORMATS[options.filmFormat] || null;
@@ -1570,11 +1699,16 @@
     const crossRatio = model.filmMm / model.crossMm - 1;
     const boundsW = analysis.width;
     const boundsH = analysis.height;
+    // 片宽（齿孔）方向由画格的实际排布决定：画格沿 x 展开说明片条横向走，
+    // 齿孔在上下（片宽方向是 y），反之亦然。检测结果里的 orientation 语义
+    // 在不同检测器间不一致，直接用几何排布更可靠。
+    const layoutAxis = frames.length > 1 ? getFramesLayoutAxis(frames) : null;
     const pads = frames.map((frame) => {
-      // 齿孔沿片条方向排列；片条竖直时片宽方向是 x，无法判断朝向时用短边。
-      const crossIsX = result && result.orientation
-        ? result.orientation === "vertical"
-        : frame.w <= frame.h;
+      const crossIsX = layoutAxis
+        ? layoutAxis === "vertical"
+        : result && result.orientation
+          ? result.orientation === "vertical"
+          : frame.w <= frame.h;
       const crossSize = crossIsX ? frame.w : frame.h;
       const alongSize = crossIsX ? frame.h : frame.w;
       const crossPad = (crossSize * crossRatio) / 2;
@@ -1602,8 +1736,16 @@
       const bottom = Math.min(boundsH, frame.y + frame.h + shared.bottom);
       return { x: left, y: top, w: right - left, h: bottom - top };
     });
-    const outW = Math.max(1, Math.min(boundsW, Math.round(Math.max(...expanded.map((frame) => frame.w)))));
-    const outH = Math.max(1, Math.min(boundsH, Math.round(Math.max(...expanded.map((frame) => frame.h)))));
+    let outW = Math.max(1, Math.min(boundsW, Math.round(Math.max(...expanded.map((frame) => frame.w)))));
+    let outH = Math.max(1, Math.min(boundsH, Math.round(Math.max(...expanded.map((frame) => frame.h)))));
+    // 统一尺寸后不能超过相邻画格的中心距，否则沿片条方向会互相覆盖。
+    if (layoutAxis) {
+      const step = getMinFrameStep(frames, layoutAxis);
+      if (step > 0) {
+        if (layoutAxis === "horizontal") outW = Math.min(outW, step);
+        else outH = Math.min(outH, step);
+      }
+    }
     return expanded.map((frame, index) => {
       const centerX = frame.x + frame.w / 2;
       const centerY = frame.y + frame.h / 2;
@@ -1960,7 +2102,11 @@
         coarseDividerRuns,
         findThinDividerRuns(dividerProfile, alongLength)
       );
-      const intervals = gapsBetweenRuns(dividerRuns, alongLength, strip.end - strip.start);
+      const detectedIntervals = gapsBetweenRuns(dividerRuns, alongLength, strip.end - strip.start);
+      // 扫描件的分隔线常与画面暗部粘连，或被平滑抹掉，造成漏格与画格偏窄。
+      // 同一卷胶片上的画格是等距排列的，用画幅长宽比拟合等距网格校正这类结果。
+      const gridIntervals = fitUniformFrameGrid(dividerRuns, detectedIntervals, strip, alongLength, context);
+      const intervals = gridIntervals || detectedIntervals;
       let stripFrameCount = 0;
 
       for (const interval of intervals) {
@@ -2331,6 +2477,97 @@
     return intervals;
   }
 
+  // 扫描件的分隔线常与画面暗部粘连，或被平滑抹掉，造成漏格与画格偏窄。
+  // 同一卷胶片的画格是等距排列的，这里以图像首尾分隔线定出画面区域，
+  // 枚举可能的画格数，选出与已检测分隔线吻合度最高的等距网格来校正边界。
+  // 仅在原始结果明显不可靠（漏格或尺寸离散）时启用，避免破坏本已准确的结果。
+  function fitUniformFrameGrid(dividerRuns, intervals, strip, alongLength, context) {
+    if (intervals.length < 2) return null;
+    const crossSize = strip.end - strip.start;
+    if (crossSize <= 0) return null;
+
+    const edgeTolerance = alongLength * 0.06;
+    const firstDivider = dividerRuns[0];
+    const lastDivider = dividerRuns[dividerRuns.length - 1];
+    const areaStart = firstDivider && firstDivider.start <= edgeTolerance
+      ? firstDivider.end
+      : intervals[0].start;
+    const areaEnd = lastDivider && lastDivider.end >= alongLength - edgeTolerance
+      ? lastDivider.start
+      : intervals[intervals.length - 1].end;
+    const span = areaEnd - areaStart;
+    if (span < crossSize * 0.8) return null;
+
+    // 画格步长的参考值：画幅长宽比换算值 + 已检测区间尺寸的上四分位数
+    // （剔除被粘连分隔线合并出的超长区间）。两者都存在时必须同时吻合，
+    // 避免用户选错画幅时把一格画面强行切成多格。
+    const format = FILM_FORMATS[context.options.filmFormat];
+    const references = [];
+    if (format) references.push(crossSize * format.aspect);
+    const sizes = intervals
+      .map((interval) => interval.end - interval.start)
+      .filter((size) => size >= crossSize * 0.5 && size <= crossSize * 1.9)
+      .sort((a, b) => a - b);
+    if (sizes.length) references.push(sizes[Math.floor((sizes.length - 1) * 0.75)]);
+    if (!references.length) references.push(crossSize * 1.5);
+
+    let best = null;
+    for (let count = 2; count <= 12; count += 1) {
+      const step = span / count;
+      if (step < 24) continue;
+      if (references.some((reference) => Math.abs(step / reference - 1) > 0.22)) continue;
+      const tolerance = step * 0.18;
+      let matched = 0;
+      let totalError = 0;
+      for (let index = 1; index < count; index += 1) {
+        const boundary = areaStart + step * index;
+        const distance = nearestDividerDistance(dividerRuns, boundary);
+        if (distance <= tolerance) {
+          matched += 1;
+          totalError += distance;
+        }
+      }
+      if (matched < Math.min(2, count - 1)) continue;
+      if (count - 1 - matched > (count <= 7 ? 1 : 2)) continue;
+      const error = totalError / matched;
+      if (!best || matched > best.matched || (matched === best.matched && error < best.error - 1e-6)) {
+        best = { count, step, matched, error };
+      }
+    }
+    if (!best) return null;
+
+    // 原始结果格数正确时，只检查内部画格尺寸是否整齐。首尾画格可能因扫描
+    // 截断而天然偏窄（如片尾的残缺画格），不能据此判定检测失败，否则会
+    // 强行等分，反而把真实画面切坏。
+    if (intervals.length === best.count) {
+      const interior = intervals.slice(1, -1);
+      if (!interior.length) return null;
+      const sizes = interior.map((interval) => interval.end - interval.start);
+      const minimum = Math.min(...sizes);
+      const maximum = Math.max(...sizes);
+      const jitter = (maximum - minimum) / Math.max(1, minimum);
+      const drift = Math.max(...sizes.map((size) => Math.abs(size - best.step) / best.step));
+      if (jitter <= 0.12 && drift <= 0.12) return null;
+    }
+
+    const fitted = [];
+    for (let index = 0; index < best.count; index += 1) {
+      const start = index === 0 ? areaStart : areaStart + best.step * index;
+      const end = index === best.count - 1 ? areaEnd : areaStart + best.step * (index + 1);
+      fitted.push({ start, end, startBounded: true, endBounded: true });
+    }
+    return fitted;
+  }
+
+  function nearestDividerDistance(runs, position) {
+    let nearest = Infinity;
+    for (const run of runs) {
+      if (position >= run.start && position <= run.end) return 0;
+      nearest = Math.min(nearest, Math.abs(position - run.start), Math.abs(position - run.end));
+    }
+    return nearest;
+  }
+
   function trimUnboundedInterval(interval, foregroundProfile, crossSize) {
     let { start, end } = interval;
     const threshold = 0.12;
@@ -2429,10 +2666,16 @@
     const balance = nonEmptyCounts.length > 1
       ? Math.min(...nonEmptyCounts) / Math.max(...nonEmptyCounts)
       : 0;
+    // 一条片轨通常承载多个画格。若把同一条底片竖切成大量单格"片轨"，
+    // 多半是方向判错，用单轨多格的效率项抑制这种结果。
+    const stripEfficiency = result.frames.length >= 3
+      ? Math.max(0, 1 - result.stripCount / result.frames.length)
+      : 0;
     return result.frames.length * 8
       + Math.min(result.stripCount, 2) * 3
       + Math.min(9, result.layoutStrength * 1.6)
       + balance * 4
+      + stripEfficiency * 4
       + areaScore;
   }
 
@@ -2799,6 +3042,20 @@
     updateFrameHistoryButtons();
   }
 
+  function deleteFrameFromJob(job, index) {
+    if (state.busy || index < 0 || index >= job.frames.length) return;
+    job.frames.splice(index, 1);
+    if (job.selectedIndex > index) job.selectedIndex -= 1;
+    job.selectedIndex = job.frames.length
+      ? clamp(job.selectedIndex, 0, job.frames.length - 1)
+      : -1;
+    if (!job.frames.length) {
+      state.jobs = state.jobs.filter((item) => item.id !== job.id);
+    }
+    renderAll();
+    showToast(`已从 ${job.file.name} 删除画格 ${String(index + 1).padStart(2, "0")}`);
+  }
+
   function deleteFrameAtIndex(index) {
     if (state.busy || index < 0 || index >= state.frames.length) return;
     const previousSnapshot = createFrameSnapshot();
@@ -2843,8 +3100,9 @@
     renderFrames();
     renderFrameEditor();
     updateExportState();
-    els.resultCount.textContent = state.frames.length ? String(state.frames.length).padStart(2, "0") : "00";
-    const hasFrames = state.frames.length > 0;
+    const totalFrames = state.jobs.reduce((sum, job) => sum + job.frames.length, 0);
+    els.resultCount.textContent = totalFrames ? String(totalFrames).padStart(2, "0") : "00";
+    const hasFrames = totalFrames > 0;
     els.noFrames.hidden = hasFrames;
     els.selectionActions.hidden = !hasFrames;
     renderJobQueue();
@@ -2937,70 +3195,126 @@
 
   function renderFrames() {
     els.framesGrid.replaceChildren();
-    state.frames.forEach((frame, index) => {
-      const card = document.createElement("article");
-      card.className = `frame-card${index === state.selectedIndex ? " is-active" : ""}${frame.checked ? "" : " is-unchecked"}`;
-      card.style.animationDelay = `${Math.min(index * 45, 360)}ms`;
-      card.dataset.index = index;
-      card.tabIndex = 0;
-      card.setAttribute("role", "checkbox");
-      card.setAttribute("aria-checked", String(frame.checked));
-      const outputSize = getFrameOutputSize(frame);
-      card.setAttribute("aria-label", `画格 ${index + 1}，输出 ${outputSize.width} × ${outputSize.height} 像素`);
-
-      const preview = document.createElement("div");
-      preview.className = "frame-preview";
-      const canvas = createPreviewCanvas(frame);
-      preview.append(canvas);
-
-      const info = document.createElement("div");
-      info.className = "frame-info";
-      const fineRotationNote = normalizeFineRotation(frame.fineRotation)
-        ? ` · 微调 ${formatSignedAngle(frame.fineRotation)}`
-        : "";
-      info.innerHTML = `<p><b>FRAME ${String(index + 1).padStart(2, "0")}</b><small>输出 ${outputSize.width} × ${outputSize.height} PX${fineRotationNote}</small></p><div class="frame-tools"><div class="frame-rotation" aria-label="画格 ${index + 1} 预览与导出角度"><button class="frame-rotate-button" data-rotate="-90" type="button" aria-label="向左旋转预览与导出" title="向左旋转预览与导出">↶</button><output>${normalizeRotation(frame.previewRotation)}°</output><button class="frame-rotate-button" data-rotate="90" type="button" aria-label="向右旋转预览与导出" title="向右旋转预览与导出">↷</button></div><button class="frame-delete-button" type="button" aria-label="删除画格 ${index + 1}" title="删除画格">✕</button><button class="frame-check" type="button" aria-label="${frame.checked ? "取消选择" : "选择"}画格 ${index + 1}"></button></div>`;
-      card.append(preview, info);
-
-      info.querySelectorAll(".frame-rotate-button").forEach((button) => {
-        button.addEventListener("click", (event) => {
-          event.stopPropagation();
-          state.selectedIndex = index;
-          const previousSnapshot = createFrameSnapshot();
-          frame.previewRotation = normalizeRotation(frame.previewRotation + Number(button.dataset.rotate));
-          commitFrameHistory(previousSnapshot);
-          updateFramePreviewCard(card, frame, index);
-        });
+    const jobs = state.jobs.filter((job) => job.frames.length);
+    const grouped = jobs.length > 1;
+    jobs.forEach((job) => {
+      const isActive = job.id === state.activeJobId;
+      if (grouped) {
+        const head = document.createElement("div");
+        head.className = `frames-group-head${isActive ? " is-active" : ""}`;
+        head.innerHTML = `<b>${escapeHtml(job.file.name)}</b><small>${job.frames.length} 个画格 · ${job.format.label}${isActive ? " · 当前编辑" : " · 点击画格切换"}</small>`;
+        els.framesGrid.append(head);
+      }
+      job.frames.forEach((frame, index) => {
+        els.framesGrid.append(createFrameCard(job, frame, index, isActive));
       });
-
-      card.addEventListener("click", (event) => {
-        if (event.target.closest(".frame-delete-button")) {
-          event.stopPropagation();
-          deleteFrameAtIndex(index);
-          return;
-        }
-        state.selectedIndex = index;
-        if (event.target.closest(".frame-check")) frame.checked = !frame.checked;
-        renderAll();
-      });
-      card.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          card.click();
-        } else if (event.key === " ") {
-          event.preventDefault();
-          state.selectedIndex = index;
-          frame.checked = !frame.checked;
-          renderAll();
-        } else if (event.key === "Delete") {
-          event.preventDefault();
-          deleteFrameAtIndex(index);
-        }
-      });
-      els.framesGrid.append(card);
     });
   }
 
-  function createPreviewCanvas(frame) {
+  function createFrameCard(job, frame, index, isActive) {
+    const card = document.createElement("article");
+    card.className = `frame-card${isActive && index === state.selectedIndex ? " is-active" : ""}${frame.checked ? "" : " is-unchecked"}${isActive ? "" : " is-inactive"}`;
+    card.style.animationDelay = `${Math.min(index * 45, 360)}ms`;
+    card.dataset.index = String(index);
+    card.dataset.jobId = job.id;
+    card.tabIndex = 0;
+    card.setAttribute("role", "checkbox");
+    card.setAttribute("aria-checked", String(frame.checked));
+    const outputSize = getFrameOutputSize(frame);
+    const sourceNote = state.jobs.length > 1 ? `（${job.file.name}）` : "";
+    card.setAttribute("aria-label", `画格 ${index + 1}${sourceNote}，输出 ${outputSize.width} × ${outputSize.height} 像素`);
+
+    const preview = document.createElement("div");
+    preview.className = "frame-preview";
+    preview.append(createPreviewCanvas(frame, job));
+
+    const info = document.createElement("div");
+    info.className = "frame-info";
+    const fineRotationNote = normalizeFineRotation(frame.fineRotation)
+      ? ` · 微调 ${formatSignedAngle(frame.fineRotation)}`
+      : "";
+    const rotationTools = isActive
+      ? `<div class="frame-rotation" aria-label="画格 ${index + 1} 预览与导出角度"><button class="frame-rotate-button" data-rotate="-90" type="button" aria-label="向左旋转预览与导出" title="向左旋转预览与导出">↶</button><output>${normalizeRotation(frame.previewRotation)}°</output><button class="frame-rotate-button" data-rotate="90" type="button" aria-label="向右旋转预览与导出" title="向右旋转预览与导出">↷</button></div>`
+      : "";
+    const editTools = `${rotationTools}<button class="frame-delete-button" type="button" aria-label="删除画格 ${index + 1}" title="删除画格">✕</button>`;
+    info.innerHTML = `<p><b>FRAME ${String(index + 1).padStart(2, "0")}</b><small>输出 ${outputSize.width} × ${outputSize.height} PX${fineRotationNote}</small></p><div class="frame-tools">${editTools}<button class="frame-check" type="button" aria-label="${frame.checked ? "取消选择" : "选择"}画格 ${index + 1}"></button></div>`;
+    card.append(preview, info);
+
+    info.querySelectorAll(".frame-rotate-button").forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        state.selectedIndex = index;
+        const previousSnapshot = createFrameSnapshot();
+        frame.previewRotation = normalizeRotation(frame.previewRotation + Number(button.dataset.rotate));
+        commitFrameHistory(previousSnapshot);
+        updateFramePreviewCard(card, frame, index);
+      });
+    });
+
+    card.addEventListener("click", (event) => {
+      if (event.target.closest(".frame-check")) {
+        event.stopPropagation();
+        frame.checked = !frame.checked;
+        if (isActive) {
+          renderAll();
+        } else {
+          renderFrames();
+          renderJobQueue();
+          updateExportState();
+        }
+        return;
+      }
+      if (event.target.closest(".frame-delete-button")) {
+        event.stopPropagation();
+        if (isActive) {
+          deleteFrameAtIndex(index);
+        } else {
+          deleteFrameFromJob(job, index);
+        }
+        return;
+      }
+      if (!isActive) {
+        void focusJobFrame(job, index);
+        return;
+      }
+      state.selectedIndex = index;
+      renderAll();
+    });
+    card.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        card.click();
+      } else if (event.key === " ") {
+        event.preventDefault();
+        if (isActive) {
+          state.selectedIndex = index;
+          frame.checked = !frame.checked;
+          renderAll();
+        } else {
+          frame.checked = !frame.checked;
+          renderFrames();
+          renderJobQueue();
+          updateExportState();
+        }
+      } else if (event.key === "Delete") {
+        event.preventDefault();
+        if (isActive) {
+          deleteFrameAtIndex(index);
+        } else {
+          deleteFrameFromJob(job, index);
+        }
+      }
+    });
+    return card;
+  }
+
+  async function focusJobFrame(job, index) {
+    if (state.busy) return;
+    job.selectedIndex = index;
+    await activateJob(job.id);
+  }
+
+  function createPreviewCanvas(frame, job = getActiveJob()) {
     const maxWidth = 330;
     const maxHeight = 240;
     const rotation = normalizeRotation(frame.previewRotation);
@@ -3013,12 +3327,50 @@
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
     ctx.scale(scale, scale);
-    drawFrameImage(ctx, state.image, frame, rotation);
+    const source = getFramePreviewSource(job);
+    if (source) {
+      if (source.scale === 1) {
+        drawFrameImage(ctx, source.image, frame, rotation);
+      } else {
+        const thumbScale = source.scale;
+        ctx.scale(1 / thumbScale, 1 / thumbScale);
+        drawFrameImage(ctx, source.image, {
+          ...frame,
+          x: frame.x * thumbScale,
+          y: frame.y * thumbScale,
+          w: frame.w * thumbScale,
+          h: frame.h * thumbScale
+        }, rotation);
+      }
+    }
     return canvas;
   }
 
+  function getFramePreviewSource(job) {
+    if (job && job.id === state.activeJobId && state.image) return { image: state.image, scale: 1 };
+    if (job?.thumb) return { image: job.thumb.canvas, scale: job.thumb.scale };
+    return null;
+  }
+
+  function captureJobThumbnail(job) {
+    const source = state.image;
+    if (!source) return;
+    const width = source.naturalWidth || source.width;
+    const height = source.naturalHeight || source.height;
+    if (!width || !height) return;
+    const scale = Math.min(1, 900 / Math.max(width, height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(width * scale));
+    canvas.height = Math.max(1, Math.round(height * scale));
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "medium";
+    ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+    job.thumb = { canvas, scale: canvas.width / width };
+  }
+
   function updateFramePreviewCard(card, frame, index) {
-    const nextCanvas = createPreviewCanvas(frame);
+    const nextCanvas = createPreviewCanvas(frame, getActiveJob());
     const outputSize = getFrameOutputSize(frame);
     card.querySelector(".frame-preview").replaceChildren(nextCanvas);
     card.querySelector(".frame-rotation output").value = `${normalizeRotation(frame.previewRotation)}°`;
@@ -3027,8 +3379,9 @@
       : "";
     card.querySelector(".frame-info p small").textContent = `输出 ${outputSize.width} × ${outputSize.height} PX${fineRotationNote}`;
     card.setAttribute("aria-label", `画格 ${index + 1}，输出 ${outputSize.width} × ${outputSize.height} 像素`);
-    els.framesGrid.querySelectorAll(".frame-card").forEach((item, itemIndex) => {
-      item.classList.toggle("is-active", itemIndex === index);
+    const activeJobId = state.activeJobId;
+    els.framesGrid.querySelectorAll(".frame-card").forEach((item) => {
+      item.classList.toggle("is-active", item.dataset.jobId === activeJobId && Number(item.dataset.index) === index);
     });
     drawSourceOverlay();
     renderFrameEditor();
@@ -3170,7 +3523,7 @@
       state.selectedIndex = index;
       handle = "";
       renderAll();
-      els.framesGrid.querySelector(`[data-index="${index}"]`)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      els.framesGrid.querySelector(`[data-job-id="${state.activeJobId}"][data-index="${index}"]`)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
     }
 
     const frame = state.frames[index];
@@ -3426,10 +3779,54 @@
   }
 
   function handleCropScopeChange() {
+    if (state.busy) return;
     const job = getActiveJob();
-    if (!job || state.busy) return;
-    job.options.cropScope = els.cropScope.value;
-    void detectFrames();
+    if (!job) return;
+    const scope = els.cropScope.value;
+    state.jobs.forEach((item) => { item.options.cropScope = scope; });
+    if (state.jobs.length <= 1) {
+      void detectFrames();
+      return;
+    }
+    void redetectAllJobs();
+  }
+
+  async function redetectAllJobs() {
+    const activeJobId = state.activeJobId;
+    const jobs = state.jobs.slice();
+    const ordered = jobs
+      .filter((job) => job.id !== activeJobId)
+      .concat(jobs.filter((job) => job.id === activeJobId));
+    const failed = [];
+    setBusy(true, "正在按新的裁切范围重新匹配所有底片…");
+    await nextPaint();
+    try {
+      for (let index = 0; index < ordered.length; index += 1) {
+        const job = ordered[index];
+        els.canvasMessage.textContent = `正在匹配 ${index + 1}/${ordered.length} · ${job.file.name}`;
+        try {
+          await loadJobRuntime(job, { render: false });
+          performActiveDetection({ recordHistory: false });
+        } catch (error) {
+          console.error(error);
+          failed.push(job.file.name);
+        }
+        renderJobQueue();
+        await nextPaint();
+      }
+    } finally {
+      const activeJob = getActiveJob();
+      if (activeJob) {
+        renderAll();
+        renderJobDetectionStatus(activeJob);
+      }
+      setBusy(false);
+      renderJobQueue();
+    }
+    const scopeLabel = els.cropScope.selectedOptions?.[0]?.textContent || els.cropScope.value;
+    showToast(failed.length
+      ? `已按「${scopeLabel}」重新匹配 ${ordered.length - failed.length} 张底片，${failed.length} 张失败`
+      : `已按「${scopeLabel}」重新匹配 ${ordered.length} 张底片`);
   }
 
   function handleSourceModeChange() {
@@ -3652,7 +4049,9 @@
   }
 
   function setAllFrames(checked) {
-    state.frames.forEach((frame) => { frame.checked = checked; });
+    state.jobs.forEach((job) => {
+      job.frames.forEach((frame) => { frame.checked = checked; });
+    });
     renderAll();
   }
 
@@ -3675,7 +4074,8 @@
       els.exportButtonHint.textContent = "浏览器";
     } else {
       els.exportButtonLabel.textContent = "导出所选画格";
-      els.exportButtonHint.textContent = count === 1 ? (selectedJobs[0]?.format.label || "IMG") : "逐张";
+      const target = resolveExportFormat();
+      els.exportButtonHint.textContent = target?.label || (count === 1 ? (selectedJobs[0]?.format.label || "IMG") : "逐张");
     }
   }
 
@@ -3789,6 +4189,7 @@
     const exportedJobIds = [];
     try {
       const quality = Number(els.exportQuality.value);
+      const targetFormat = resolveExportFormat();
       for (let jobIndex = 0; jobIndex < selectedJobs.length; jobIndex += 1) {
         const job = selectedJobs[jobIndex];
         const selectedFrames = job.frames.filter((frame) => frame.checked);
@@ -3798,8 +4199,9 @@
           const baseName = job.file.name.replace(/\.[^.]+$/, "") || "film";
           const digits = Math.max(2, String(selectedFrames.length).length);
           for (let frameIndex = 0; frameIndex < selectedFrames.length; frameIndex += 1) {
-            const blob = await cropToBlob(selectedFrames[frameIndex], job.format, quality);
-            const name = `${baseName}_${String(frameIndex + 1).padStart(digits, "0")}.${job.format.ext}`;
+            const outputFormat = targetFormat || job.format;
+            const blob = await cropToBlob(selectedFrames[frameIndex], outputFormat, quality, { explicit: Boolean(targetFormat) });
+            const name = `${baseName}_${String(frameIndex + 1).padStart(digits, "0")}.${outputFormat.ext}`;
             if (directoryHandle) {
               await saveBlobToDirectory(blob, name, directoryHandle);
             } else {
@@ -4171,16 +4573,24 @@
     return new Blob([output], { type: "image/bmp" });
   }
 
-  function cropToBlob(frame, format, quality) {
+  function encodeTiffCanvas(canvas) {
+    if (typeof UTIF === "undefined") throw new Error("TIFF codec is unavailable");
+    const rgba = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
+    return new Blob([UTIF.encodeImage(rgba, canvas.width, canvas.height)], { type: "image/tiff" });
+  }
+
+  function cropToBlob(frame, format, quality, { explicit = false } = {}) {
     if (format.isTiff) {
-      if (normalizeFineRotation(frame.fineRotation)) {
+      const canPreserve = !normalizeFineRotation(frame.fineRotation) && Boolean(state.tiffSource);
+      if (canPreserve) {
+        const tiff = encodePreservedTiffCrop(state.tiffSource, frame);
+        return Promise.resolve(new Blob([tiff], { type: "image/tiff" }));
+      }
+      if (!explicit) {
         const error = new Error("Arbitrary TIFF rotation would require resampling");
-        error.userMessage = "TIFF 小角度校正需要重采样，会破坏当前 8/16-bit 无损路径；请将微调角度恢复为 0°。";
+        error.userMessage = "TIFF 小角度校正需要重采样，会破坏当前 8/16-bit 无损路径；请将微调角度恢复为 0°，或把导出格式改为 TIFF 以外的选项。";
         return Promise.reject(error);
       }
-      if (!state.tiffSource) return Promise.reject(new Error("TIFF source samples are unavailable"));
-      const tiff = encodePreservedTiffCrop(state.tiffSource, frame);
-      return Promise.resolve(new Blob([tiff], { type: "image/tiff" }));
     }
 
     const rotation = normalizeRotation(frame.previewRotation);
@@ -4198,6 +4608,13 @@
     ctx.restore();
 
     if (format.isBmp) return Promise.resolve(encodeBmpCanvas(canvas));
+    if (format.isTiff) {
+      try {
+        return Promise.resolve(encodeTiffCanvas(canvas));
+      } catch (error) {
+        return Promise.reject(error);
+      }
+    }
 
     return new Promise((resolve, reject) => {
       canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Canvas export failed")), format.mime, quality);
