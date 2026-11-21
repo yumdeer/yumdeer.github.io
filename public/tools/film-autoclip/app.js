@@ -1770,8 +1770,15 @@
       y1: Math.max(box.y1, frame.y + frame.h)
     }), { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity });
     const horizontal = union.x1 - union.x0 >= union.y1 - union.y0;
-    const alongStart = horizontal ? union.x0 : union.y0;
-    const alongEnd = horizontal ? union.x1 : union.y1;
+    // 暗部画格可能整格漏检，已识别画格的包围盒会明显短于胶片区域，
+    // 此时以画面（已裁掉白边）的实际长度作为胶片跨度。
+    const analysisLength = horizontal ? analysis.width : analysis.height;
+    let alongStart = horizontal ? union.x0 : union.y0;
+    let alongEnd = horizontal ? union.x1 : union.y1;
+    if (alongEnd - alongStart < analysisLength * 0.85) {
+      alongStart = 0;
+      alongEnd = analysisLength;
+    }
     const span = alongEnd - alongStart;
     if (span < 24) return result;
 
@@ -1785,22 +1792,7 @@
     const count = Math.round(span / median);
     if (count < 2 || count > 12 || span < median) return result;
     const step = span / count;
-    if (Math.abs(step / median - 1) > 0.25) return result;
-
-    // 首尾画格可能被扫描截断而天然偏窄，保持原框，避免强行拉齐时吞进相邻画面。
-    const edgeFrame = (first) => {
-      const target = first ? alongStart : alongEnd;
-      return frames
-        .filter((frame) => {
-          const start = horizontal ? frame.x : frame.y;
-          const end = start + (horizontal ? frame.w : frame.h);
-          return Math.abs((first ? start : end) - target) <= step * 0.25;
-        })
-        .sort((a, b) => (horizontal ? a.w : a.h) - (horizontal ? b.w : b.h))[0] || null;
-    };
-    const truncated = (frame) => frame && (horizontal ? frame.w : frame.h) < median * 0.9;
-    const firstEdge = truncated(edgeFrame(true)) ? edgeFrame(true) : null;
-    const lastEdge = truncated(edgeFrame(false)) ? edgeFrame(false) : null;
+    if (Math.abs(step / median - 1) > 0.15) return result;
 
     const deviated = frames.length !== count || frames.some((frame) => (
       Math.abs((horizontal ? frame.w : frame.h) / median - 1) > 0.08
@@ -1810,22 +1802,15 @@
 
     const crossStart = middle(frames.map((frame) => (horizontal ? frame.y : frame.x)));
     const inset = Math.round(options.inset / Math.max(state.scaleX, 0.001));
+    // 所有画格统一取同一个尺寸，避免首尾格被单独压窄；格宽不超过格距，保证不重叠。
+    const unit = Math.min(median, step);
     const rebuilt = [];
     for (let index = 0; index < count; index += 1) {
-      const preserved = (index === 0 && firstEdge) || (index === count - 1 && lastEdge) || null;
-      let adjusted;
-      if (preserved) {
-        adjusted = { x: preserved.x, y: preserved.y, w: preserved.w, h: preserved.h };
-      } else {
-        let start = alongStart + step * index + (step - median) / 2;
-        if (index === 0) start = alongStart;
-        if (index === count - 1) start = alongEnd - median;
-        start = clamp(start, alongStart, alongEnd - median);
-        const rect = horizontal
-          ? { x: start, y: crossStart, w: median, h: medianCross }
-          : { x: crossStart, y: start, w: medianCross, h: median };
-        adjusted = insetRect(rect, inset, analysis.width, analysis.height);
-      }
+      const start = alongStart + step * index + (step - unit) / 2;
+      const rect = horizontal
+        ? { x: start, y: crossStart, w: unit, h: medianCross }
+        : { x: crossStart, y: start, w: medianCross, h: unit };
+      const adjusted = insetRect(rect, inset, analysis.width, analysis.height);
       if (!isUsableFrame(adjusted, analysis)) continue;
       rebuilt.push({ ...adjusted, stripIndex: 0 });
     }
