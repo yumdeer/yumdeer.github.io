@@ -665,7 +665,7 @@
 
   /* ---------- 图片加载与分析 ---------- */
 
-  async function decodeFile(file) {
+  async function decodeNative(file) {
     if (window.createImageBitmap) {
       try {
         return await createImageBitmap(file, { imageOrientation: 'from-image' });
@@ -690,6 +690,42 @@
       };
       img.src = url;
     });
+  }
+
+  /* 浏览器原生不支持 TIFF，用 UTIF 解码成位图 */
+  async function decodeTiff(file) {
+    if (typeof UTIF === 'undefined') throw new Error('TIFF codec is unavailable');
+    const buffer = await file.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    const isTiff =
+      (bytes[0] === 0x49 && bytes[1] === 0x49 && bytes[2] === 0x2a) ||
+      (bytes[0] === 0x4d && bytes[1] === 0x4d && bytes[2] === 0x00 && bytes[3] === 0x2a);
+    if (!isTiff) throw new Error('decode failed');
+    const ifds = UTIF.decode(buffer);
+    if (!ifds.length) throw new Error('decode failed');
+    UTIF.decodeImage(buffer, ifds[0], ifds);
+    const rgba = UTIF.toRGBA8(ifds[0]);
+    const w = ifds[0].width;
+    const h = ifds[0].height;
+    const cnv = document.createElement('canvas');
+    cnv.width = w;
+    cnv.height = h;
+    const ctx = cnv.getContext('2d');
+    const imgData = ctx.createImageData(w, h);
+    imgData.data.set(rgba);
+    ctx.putImageData(imgData, 0, 0);
+    return createImageBitmap(cnv);
+  }
+
+  async function decodeFile(file) {
+    try {
+      return await decodeNative(file);
+    } catch (err) {
+      /* 原生解码失败时再走 TIFF 兜底，其他格式仍然报错 */
+      return decodeTiff(file).catch(() => {
+        throw err;
+      });
+    }
   }
 
   /* 当前裁剪区域（原图像素，编辑裁剪时视为未裁剪） */
