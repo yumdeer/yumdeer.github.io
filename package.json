@@ -15,7 +15,9 @@
     "setup": "npm run gen:brand && npm run gen:icons && npm run gen:placeholders",
     "gen:brand": "node scripts/generate-brand.mjs",
     "gen:icons": "node scripts/generate-icons.mjs",
-    "gen:placeholders": "node scripts/generate-placeholders.mjs"
+    "gen:placeholders": "node scripts/generate-placeholders.mjs",
+    "test": "node --test tests/tools/*.test.mjs",
+    "test:tools": "node --test --test-concurrency=4 tests/tools/*.test.mjs"
   },
   "dependencies": {
     "@astrojs/cloudflare": "^14.3.4",
@@ -32,6 +34,7 @@
     "yaml": "^2.9.1"
   },
   "devDependencies": {
+    "playwright": "^1.58.2",
     "wrangler": "^4.151.0"
   }
 }

@@ -654,6 +654,13 @@
     });
     state.selectedIndex = state.frames.length ? 0 : -1;
     job.options = options;
+    // 自动化测试入口：仅在显式带 selftest 参数时暴露检测结果，正常使用不受影响。
+    if (new URLSearchParams(location.search).has("selftest")) {
+      window.__selftest = {
+        options,
+        frames: result.frames.map((frame) => ({ x: frame.x, y: frame.y, w: frame.w, h: frame.h }))
+      };
+    }
     job.frames = state.frames;
     job.selectedIndex = state.selectedIndex;
     job.status = "ready";
@@ -1761,7 +1768,7 @@
   // 画格的中位宽高为准，画幅比例只用于校验扫描件比例与推算格数。
   function refineFramesWithExplicitFormat(result, analysis, options) {
     const format = FILM_FORMATS[options.filmFormat];
-    if (!format || options.cropScope !== "frame" || !result || !result.frames.length) return result;
+    if (!format || !result || !result.frames.length) return result;
     const frames = result.frames;
     const union = frames.reduce((box, frame) => ({
       x0: Math.min(box.x0, frame.x),
