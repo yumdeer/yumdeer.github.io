@@ -1796,7 +1796,10 @@
 
     // 扫描件的画格比例应接近所选画幅，偏差过大说明画幅与画面不符，不做强约束。
     if (Math.abs(median / medianCross / format.aspect - 1) > 0.2) return result;
-    const count = Math.round(span / median);
+    // 画格之间必然留有分隔线，取整后若总宽明显超出胶片跨度（放不下）就退回少一格，
+    // 避免 1500 / 230 ≈ 6.5 被取成 7 格而把完整画面切碎。
+    let count = Math.round(span / median);
+    if (count * median > span * 1.05) count -= 1;
     if (count < 2 || count > 12 || span < median) return result;
     const step = span / count;
     if (Math.abs(step / median - 1) > 0.15) return result;
@@ -1831,9 +1834,78 @@
     };
   }
 
+  // 夜景/暗光底片的内容与片基同处暗部，掩膜几乎检测不到画格。
+  // 提亮后重新检测边框，作为显式画幅约束的兜底输入。
+  function boostAnalysisForDetection(analysis) {
+    const { width, height } = analysis;
+    const data = analysis.imageData.data;
+    const histogram = new Uint32Array(256);
+    const stride = Math.max(1, Math.round(Math.sqrt((width * height) / 200000)));
+    let samples = 0;
+    for (let y = 0; y < height; y += stride) {
+      for (let x = 0; x < width; x += stride) {
+        const offset = (y * width + x) * 4;
+        const luma = (data[offset] * 299 + data[offset + 1] * 587 + data[offset + 2] * 114) / 1000;
+        histogram[Math.round(luma)] += 1;
+        samples += 1;
+      }
+    }
+    if (!samples) return null;
+    const bright = ((ratio) => {
+      let target = samples * ratio;
+      for (let value = 0; value < 256; value += 1) {
+        target -= histogram[value];
+        if (target <= 0) return value;
+      }
+      return 255;
+    })(0.995);
+    if (bright >= 150) return null;
+    const gain = Math.min(4, 210 / Math.max(24, bright));
+    if (gain <= 1.15) return null;
+    const boosted = new Uint8ClampedArray(data.length);
+    for (let index = 0; index < data.length; index += 4) {
+      boosted[index] = data[index] * gain;
+      boosted[index + 1] = data[index + 1] * gain;
+      boosted[index + 2] = data[index + 2] * gain;
+      boosted[index + 3] = data[index + 3];
+    }
+    return { ...analysis, imageData: new ImageData(boosted, width, height) };
+  }
+
+  // 比较两次检测结果：覆盖整条胶片、且画格比例更贴合所选画幅的一方更可信。
+  function preferDetection(primary, alternate, format, analysis) {
+    if (!alternate || !alternate.frames.length) return primary;
+    if (!primary || !primary.frames.length) return alternate;
+    const evaluate = (result) => {
+      const frames = result.frames;
+      const union = frames.reduce((box, frame) => ({
+        x0: Math.min(box.x0, frame.x),
+        y0: Math.min(box.y0, frame.y),
+        x1: Math.max(box.x1, frame.x + frame.w),
+        y1: Math.max(box.y1, frame.y + frame.h)
+      }), { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity });
+      const horizontal = union.x1 - union.x0 >= union.y1 - union.y0;
+      const middle = (values) => values.slice().sort((a, b) => a - b)[Math.floor((values.length - 1) / 2)];
+      const along = middle(frames.map((frame) => (horizontal ? frame.w : frame.h)));
+      const cross = middle(frames.map((frame) => (horizontal ? frame.h : frame.w)));
+      if (!along || !cross) return -Infinity;
+      const length = horizontal ? analysis.width : analysis.height;
+      const coverage = Math.min(1, (along * frames.length) / Math.max(1, length));
+      return coverage - Math.abs(Math.log(along / cross / format.aspect)) * 0.5;
+    };
+    return evaluate(alternate) > evaluate(primary) + 0.02 ? alternate : primary;
+  }
+
   function runDetection(analysis, options) {
     const cropped = cropWhiteMargins(analysis);
     let result = detectOnAnalysis(cropped.analysis, options);
+    const format = FILM_FORMATS[options.filmFormat];
+    if (format) {
+      const boosted = boostAnalysisForDetection(cropped.analysis);
+      if (boosted) {
+        result = preferDetection(result, detectOnAnalysis(boosted, options), format, cropped.analysis);
+      }
+    }
     result = refineFramesWithExplicitFormat(result, cropped.analysis, options);
     if (result && options && options.cropScope === "sprocket") {
       result.frames = expandFramesToFilmBorder(result.frames, cropped.analysis, options, result);
