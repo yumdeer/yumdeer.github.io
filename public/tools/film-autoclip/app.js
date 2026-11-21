@@ -1756,8 +1756,9 @@
   }
 
   // 用户明确选择画幅时，画格比例与格数是强约束：暗部画格容易在掩膜检测中
-  // 漏检或只框住局部，导致比例偏离画幅、整卷少一格。检测结果明显偏离所选
-  // 画幅时，按画幅比例与实测格距重建等距网格。
+  // 漏检或只框住局部，导致整卷少一格、个别画格尺寸异常。扫描件的像素尺寸
+  // 与 36×24 毫米并不等价（可能是 2700×1800 等），因此画格像素尺寸以已识别
+  // 画格的中位宽高为准，画幅比例只用于校验扫描件比例与推算格数。
   function refineFramesWithExplicitFormat(result, analysis, options) {
     const format = FILM_FORMATS[options.filmFormat];
     if (!format || options.cropScope !== "frame" || !result || !result.frames.length) return result;
@@ -1769,41 +1770,62 @@
       y1: Math.max(box.y1, frame.y + frame.h)
     }), { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity });
     const horizontal = union.x1 - union.x0 >= union.y1 - union.y0;
-    const crossStart = horizontal ? union.y0 : union.x0;
-    const crossSize = horizontal ? union.y1 - union.y0 : union.x1 - union.x0;
     const alongStart = horizontal ? union.x0 : union.y0;
     const alongEnd = horizontal ? union.x1 : union.y1;
     const span = alongEnd - alongStart;
-    if (crossSize < 24 || span < 24) return result;
+    if (span < 24) return result;
 
-    const lengths = frames
-      .map((frame) => (horizontal ? frame.w : frame.h))
-      .sort((a, b) => a - b);
-    const median = lengths[Math.floor((lengths.length - 1) / 2)];
-    if (!median) return result;
+    const middle = (values) => values.slice().sort((a, b) => a - b)[Math.floor((values.length - 1) / 2)];
+    const median = middle(frames.map((frame) => (horizontal ? frame.w : frame.h)));
+    const medianCross = middle(frames.map((frame) => (horizontal ? frame.h : frame.w)));
+    if (!median || !medianCross) return result;
 
-    // 画幅换算出的画格长度与实测格距必须接近，避免用户选错画幅时强行切分画面。
-    const expected = crossSize * format.aspect;
-    if (span < expected || Math.abs(expected / median - 1) > 0.25) return result;
+    // 扫描件的画格比例应接近所选画幅，偏差过大说明画幅与画面不符，不做强约束。
+    if (Math.abs(median / medianCross / format.aspect - 1) > 0.2) return result;
     const count = Math.round(span / median);
-    if (count < 2 || count > 12) return result;
+    if (count < 2 || count > 12 || span < median) return result;
     const step = span / count;
-    if (Math.abs(step / expected - 1) > 0.2) return result;
+    if (Math.abs(step / median - 1) > 0.25) return result;
 
-    const deviated = frames.some((frame) => formatAspectDeviation(frame, format) > 0.08);
-    if (!deviated && frames.length === count) return result;
+    // 首尾画格可能被扫描截断而天然偏窄，保持原框，避免强行拉齐时吞进相邻画面。
+    const edgeFrame = (first) => {
+      const target = first ? alongStart : alongEnd;
+      return frames
+        .filter((frame) => {
+          const start = horizontal ? frame.x : frame.y;
+          const end = start + (horizontal ? frame.w : frame.h);
+          return Math.abs((first ? start : end) - target) <= step * 0.25;
+        })
+        .sort((a, b) => (horizontal ? a.w : a.h) - (horizontal ? b.w : b.h))[0] || null;
+    };
+    const truncated = (frame) => frame && (horizontal ? frame.w : frame.h) < median * 0.9;
+    const firstEdge = truncated(edgeFrame(true)) ? edgeFrame(true) : null;
+    const lastEdge = truncated(edgeFrame(false)) ? edgeFrame(false) : null;
 
+    const deviated = frames.length !== count || frames.some((frame) => (
+      Math.abs((horizontal ? frame.w : frame.h) / median - 1) > 0.08
+      || Math.abs((horizontal ? frame.h : frame.w) / medianCross - 1) > 0.08
+    ));
+    if (!deviated) return result;
+
+    const crossStart = middle(frames.map((frame) => (horizontal ? frame.y : frame.x)));
     const inset = Math.round(options.inset / Math.max(state.scaleX, 0.001));
     const rebuilt = [];
     for (let index = 0; index < count; index += 1) {
-      let start = alongStart + step * index + (step - expected) / 2;
-      if (index === 0) start = alongStart;
-      if (index === count - 1) start = alongEnd - expected;
-      start = clamp(start, alongStart, alongEnd - expected);
-      const rect = horizontal
-        ? { x: start, y: crossStart, w: expected, h: crossSize }
-        : { x: crossStart, y: start, w: crossSize, h: expected };
-      const adjusted = insetRect(rect, inset, analysis.width, analysis.height);
+      const preserved = (index === 0 && firstEdge) || (index === count - 1 && lastEdge) || null;
+      let adjusted;
+      if (preserved) {
+        adjusted = { x: preserved.x, y: preserved.y, w: preserved.w, h: preserved.h };
+      } else {
+        let start = alongStart + step * index + (step - median) / 2;
+        if (index === 0) start = alongStart;
+        if (index === count - 1) start = alongEnd - median;
+        start = clamp(start, alongStart, alongEnd - median);
+        const rect = horizontal
+          ? { x: start, y: crossStart, w: median, h: medianCross }
+          : { x: crossStart, y: start, w: medianCross, h: median };
+        adjusted = insetRect(rect, inset, analysis.width, analysis.height);
+      }
       if (!isUsableFrame(adjusted, analysis)) continue;
       rebuilt.push({ ...adjusted, stripIndex: 0 });
     }
