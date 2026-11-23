@@ -26,6 +26,7 @@
     frameCount: $("#frameCount"),
     cropScope: $("#cropScope"),
     jobSelectAll: $("#jobSelectAll"),
+    diagButton: $("#diagButton"),
     filmBaseControl: $("#filmBaseControl"),
     filmBaseSwatch: $("#filmBaseSwatch"),
     filmBaseStatus: $("#filmBaseStatus"),
@@ -609,6 +610,7 @@
       width,
       height
     };
+    if (new URLSearchParams(location.search).has("selftest")) window.__analysis = state.analysis;
     state.scaleX = image.naturalWidth / width;
     state.scaleY = image.naturalHeight / height;
     els.sourceCanvas.width = width;
@@ -667,6 +669,23 @@
       window.__selftest = {
         options,
         frames: result.frames.map((frame) => ({ x: frame.x, y: frame.y, w: frame.w, h: frame.h }))
+      };
+      // 允许用例注入“只识别到部分画格”的候选框，验证自动补齐逻辑。
+      window.__selftestApi = {
+        normalize: (frames) => {
+          const normalized = normalizeStripToRegularGrid({ frames }, state.analysis, readDetectionOptions());
+          return normalized
+            ? normalized.frames.map((frame) => ({ x: frame.x, y: frame.y, w: frame.w, h: frame.h }))
+            : null;
+        },
+        refine: (frames) => {
+          const refined = refineFramesWithExplicitFormat(
+            { frames: frames.map((frame) => ({ ...frame })) },
+            state.analysis,
+            { ...readDetectionOptions(), filmFormat: "135", frameCount: 0 }
+          );
+          return refined ? refined.frames.map((frame) => ({ x: frame.x, y: frame.y, w: frame.w, h: frame.h })) : null;
+        }
       };
     }
     job.frames = state.frames;
@@ -1774,12 +1793,51 @@
   // 漏检或只框住局部，导致整卷少一格、个别画格尺寸异常。扫描件的像素尺寸
   // 与 36×24 毫米并不等价（可能是 2700×1800 等），因此画格像素尺寸以已识别
   // 画格的中位宽高为准，画幅比例只用于校验扫描件比例与推算格数。
+  // 画格尺寸统一规则：先剔除碎片框（宽高同时明显小于最大框），再用中位宽作画格宽度。
+  // 自动补齐与显式画幅共用同一套落点，保证两条路径对同一张扫描件给出一致结果。
+  function solidFrameSizes(frames, horizontal) {
+    if (!frames.length) return [];
+    const maxAlong = Math.max(...frames.map((frame) => (horizontal ? frame.w : frame.h)));
+    const maxCross = Math.max(...frames.map((frame) => (horizontal ? frame.h : frame.w)));
+    const solid = frames.filter((frame) => (horizontal ? frame.w : frame.h) >= maxAlong * 0.9
+      || (horizontal ? frame.h : frame.w) >= maxCross * 0.9);
+    return (solid.length ? solid : frames).map((frame) => (horizontal ? frame.w : frame.h));
+  }
+
+  function buildUniformFrames(frames, geometry) {
+    const { horizontal, alongStart, step, count, crossStart, crossSize, pitch, inset, analysis, countCorrected } = geometry;
+    const sizes = solidFrameSizes(frames, horizontal).sort((a, b) => a - b);
+    const median = sizes.length ? sizes[Math.floor((sizes.length - 1) / 2)] : 0;
+    let unit = Math.min(step, median >= step * 0.75 ? median : step * 0.96);
+    // 张数被暗谷校正过时，说明检出框宽度整体不可信（如整条均分成 7 个窄框），
+    // 改用格距推断画格宽度，避免按窄框落点切掉画面。
+    if (countCorrected) unit = Math.min(step, Math.max(unit, Math.round(step * 0.97)));
+    if (sizes.length < 3) unit = Math.min(step, Math.max(unit, Math.round(pitch * 0.96)));
+    const rebuilt = [];
+    for (let index = 0; index < count; index += 1) {
+      const start = alongStart + step * index + (step - unit) / 2;
+      const rect = horizontal
+        ? { x: start, y: crossStart, w: unit, h: crossSize }
+        : { x: crossStart, y: start, w: crossSize, h: unit };
+      const adjusted = insetRect(rect, inset, analysis.width, analysis.height);
+      if (!isUsableFrame(adjusted, analysis)) continue;
+      rebuilt.push({ ...adjusted, stripIndex: 0 });
+    }
+    return rebuilt;
+  }
+
   function refineFramesWithExplicitFormat(result, analysis, options) {
     const format = FILM_FORMATS[options.filmFormat];
     const forcedCount = Math.round(Number(options.frameCount) || 0);
     const forced = forcedCount >= 2 && forcedCount <= 12;
     if ((!format && !forced) || !result || !result.frames.length) return result;
-    const frames = result.frames;
+    // 碎片框（宽高同时明显小于最大框）会拖歪宽度中位数与格距推算，统计前先剔除；
+    // 最大框本身永远保留，避免整条结果被误判为碎片。
+    const maxWidth = Math.max(...result.frames.map((frame) => frame.w));
+    const maxHeight = Math.max(...result.frames.map((frame) => frame.h));
+    const frames = result.frames.filter((frame) =>
+      frame.w >= maxWidth * 0.9 || frame.h >= maxHeight * 0.9
+    );
     const union = frames.reduce((box, frame) => ({
       x0: Math.min(box.x0, frame.x),
       y0: Math.min(box.y0, frame.y),
@@ -1803,6 +1861,14 @@
     const median = middle(frames.map((frame) => (horizontal ? frame.w : frame.h)));
     const medianCross = middle(frames.map((frame) => (horizontal ? frame.h : frame.w)));
     if (!median || !medianCross) return result;
+    // 画格起点间距比单格宽度更稳定：暗部/截断画格会被检测得偏窄，但不会被检测得偏移。
+    const starts = frames.map((frame) => (horizontal ? frame.x : frame.y)).sort((a, b) => a - b);
+    const gaps = [];
+    for (let index = 1; index < starts.length; index += 1) {
+      const gap = starts[index] - starts[index - 1];
+      if (gap > 8) gaps.push(gap);
+    }
+    const pitch = gaps.length ? middle(gaps) : median;
 
     // 扫描件的画格比例应接近所选画幅，偏差过大说明画幅与画面不符，不做强约束。
     // 用户手动指定张数时以用户为准，跳过自动校验。
@@ -1813,10 +1879,10 @@
     } else {
       // 画格之间必然留有分隔线，取整后若总宽明显超出胶片跨度（放不下）就退回少一格，
       // 避免 1500 / 230 ≈ 6.5 被取成 7 格而把完整画面切碎。
-      count = Math.round(span / median);
-      if (count * median > span * 1.05) count -= 1;
-      if (count < 2 || count > 12 || span < median) return result;
-      if (Math.abs(span / count / median - 1) > 0.15) return result;
+      count = Math.round(span / pitch);
+      if (count * pitch > span * 1.05) count -= 1;
+      if (count < 2 || count > 12 || span < pitch) return result;
+      if (Math.abs(span / count / pitch - 1) > 0.15) return result;
     }
     const step = span / count;
     if (step < 16) return result;
@@ -1827,21 +1893,336 @@
     ));
     if (!deviated) return result;
 
-    const crossStart = middle(frames.map((frame) => (horizontal ? frame.y : frame.x)));
     const inset = Math.round(options.inset / Math.max(state.scaleX, 0.001));
-    // 所有画格统一取同一个尺寸，避免首尾格被单独压窄；格宽不超过格距，保证不重叠。
-    const unit = Math.min(step, median >= step * 0.75 ? median : step * 0.96);
-    const rebuilt = [];
-    for (let index = 0; index < count; index += 1) {
-      const start = alongStart + step * index + (step - unit) / 2;
-      const rect = horizontal
-        ? { x: start, y: crossStart, w: unit, h: medianCross }
-        : { x: crossStart, y: start, w: medianCross, h: unit };
-      const adjusted = insetRect(rect, inset, analysis.width, analysis.height);
-      if (!isUsableFrame(adjusted, analysis)) continue;
-      rebuilt.push({ ...adjusted, stripIndex: 0 });
+    // 暗部下缘常被当成片基裁掉，画格高度会明显小于胶片实际高度：
+    // 以最高的那个检测框为基准，若整行基本占满画面则直接补到画面边缘。
+    const crossLimit = horizontal ? analysis.height : analysis.width;
+    const crossStart = Math.min(...frames.map((frame) => (horizontal ? frame.y : frame.x)));
+    const crossEnd = Math.max(...frames.map((frame) => (horizontal ? frame.y + frame.h : frame.x + frame.w)));
+    let crossSize = Math.max(medianCross, ...frames.map((frame) => (horizontal ? frame.h : frame.w)));
+    if (crossEnd - crossStart >= crossLimit * 0.85) {
+      crossSize = crossLimit - crossStart;
+    } else if (frames.length < 3) {
+      // 样本太少时中位高不可靠，显式画幅按比例推算短边。
+      const expected = format ? step / format.aspect : 0;
+      if (expected > crossSize && expected <= crossLimit * 1.02) crossSize = Math.min(expected, crossLimit);
     }
+    const rebuilt = buildUniformFrames(frames, {
+      horizontal, alongStart, step, count, crossStart, crossSize, pitch, inset, analysis
+    });
     if (!rebuilt.length) return result;
+    return {
+      ...result,
+      frames: rebuilt,
+      stripCount: 1,
+      stripFrameCounts: [rebuilt.length],
+      edgeFrameCount: 0
+    };
+  }
+
+  // 槽位是否像画格：暗部漏检的画格仍有画面纹理（亮度方差大、存在非片基像素），
+  // 而胶片条外的纯片基/背景是均匀暗区，方差很小。用于判断能否向两侧补齐画格。
+  function slotHasFrameContent(analysis, start, end, horizontal) {
+    const { width, height, imageData } = analysis;
+    const data = imageData.data;
+    const x0 = horizontal ? Math.max(0, Math.round(start)) : 0;
+    const x1 = horizontal ? Math.min(width, Math.round(end)) : width;
+    const y0 = horizontal ? 0 : Math.max(0, Math.round(start));
+    const y1 = horizontal ? height : Math.min(height, Math.round(end));
+    if (x1 - x0 < 4 || y1 - y0 < 4) return false;
+    const stepX = Math.max(1, Math.round((x1 - x0) / 40));
+    const stepY = Math.max(1, Math.round((y1 - y0) / 20));
+    let count = 0;
+    let sum = 0;
+    let sum2 = 0;
+    let bright = 0;
+    for (let y = y0; y < y1; y += stepY) {
+      for (let x = x0; x < x1; x += stepX) {
+        const offset = (y * width + x) * 4;
+        const luma = data[offset] * 0.2126 + data[offset + 1] * 0.7152 + data[offset + 2] * 0.0722;
+        sum += luma;
+        sum2 += luma * luma;
+        if (luma > 55) bright += 1;
+        count += 1;
+      }
+    }
+    if (!count) return false;
+    const mean = sum / count;
+    const deviation = Math.sqrt(Math.max(0, sum2 / count - mean * mean));
+    const brightRatio = bright / count;
+    // 阈值偏低：极暗画格（如夜间猫照）亮度方差只有 10~16，而纯片基/背景的方差通常低于 8。
+    return deviation >= 8 && (brightRatio >= 0.06 || mean >= 16);
+  }
+
+  // 列/行亮度剖面：用于判断相邻画格之间的分隔线（片基缝隙），比绝对亮度更不受曝光影响。
+  function buildLumaProfile(analysis, horizontal) {
+    const { width, height, imageData } = analysis;
+    const data = imageData.data;
+    const length = horizontal ? width : height;
+    const cross = horizontal ? height : width;
+    const crossStep = Math.max(1, Math.round(cross / 80));
+    const profile = new Float32Array(length);
+    for (let index = 0; index < length; index += 1) {
+      let sum = 0;
+      let count = 0;
+      for (let other = 0; other < cross; other += crossStep) {
+        const x = horizontal ? index : other;
+        const y = horizontal ? other : index;
+        const offset = (y * width + x) * 4;
+        sum += data[offset] * 0.2126 + data[offset + 1] * 0.7152 + data[offset + 2] * 0.0722;
+        count += 1;
+      }
+      profile[index] = sum / Math.max(1, count);
+    }
+    return profile;
+  }
+
+  // 判断 position 附近是否存在画格分隔线：局部暗谷，且与两侧画面有明显亮度差。
+  // 纯片基/背景是均匀的，不会形成暗谷，可避免把空白区域当成漏检画格。
+  function isStripBoundary(profile, position, step) {
+    const length = profile.length;
+    if (position <= 2 || position >= length - 3) return false;
+    const half = Math.max(2, Math.round(step * 0.02));
+    let sep = Infinity;
+    for (let index = Math.max(0, position - half); index <= Math.min(length - 1, position + half); index += 1) {
+      sep = Math.min(sep, profile[index]);
+    }
+    const meanAround = (from, to) => {
+      let sum = 0;
+      let count = 0;
+      for (let index = Math.max(0, from); index < Math.min(length, to); index += 1) {
+        sum += profile[index];
+        count += 1;
+      }
+      return count ? sum / count : 0;
+    };
+    const gap = Math.max(6, Math.round(step * 0.03));
+    const span = Math.max(24, Math.round(step * 0.2));
+    const left = meanAround(position - gap - span, position - gap);
+    const right = meanAround(position + gap, position + gap + span);
+    const brighter = Math.max(left, right);
+    if (brighter < 8) return false;
+    return sep <= brighter * 0.6 && brighter - sep >= 6;
+  }
+
+  // 自动画幅下暗部画格整格漏检时，检测到的画格会明显少于胶片条实际格数。
+  // 画格等距排列，且漏检画格的画面内容依然存在：按画格间距向两侧补齐到画格内容边界，
+  // 只在格数与已识别格数不一致时重建，避免打乱本来就正确的检测结果。
+  function normalizeStripToRegularGrid(result, analysis, options) {
+    const frames = result?.frames;
+    if (!frames?.length) return result;
+    const union = frames.reduce((box, frame) => ({
+      x0: Math.min(box.x0, frame.x),
+      y0: Math.min(box.y0, frame.y),
+      x1: Math.max(box.x1, frame.x + frame.w),
+      y1: Math.max(box.y1, frame.y + frame.h)
+    }), { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity });
+    const unionW = union.x1 - union.x0;
+    const unionH = union.y1 - union.y0;
+    if (Math.max(unionW, unionH) < Math.min(unionW, unionH) * 1.6) return result;
+    const horizontal = unionW >= unionH;
+    const alongLength = horizontal ? analysis.width : analysis.height;
+    const crossLength = horizontal ? analysis.height : analysis.width;
+    // 只处理单排画格：多排胶片条交给原有逻辑。
+    const crossStarts = frames.map((frame) => (horizontal ? frame.y : frame.x));
+    if (Math.max(...crossStarts) - Math.min(...crossStarts) > crossLength * 0.25) return result;
+    // 暗部画格可能只被检出一条窄碎片（高度明显偏矮）；以最高画格为基准筛掉这类碎片，
+    // 让格距、跨度和槽位校验只参考完整画格。
+    const crossSizes = frames.map((frame) => (horizontal ? frame.h : frame.w));
+    const maxCross = Math.max(...crossSizes);
+    const aligned = frames.filter((frame) => (horizontal ? frame.h : frame.w) >= maxCross * 0.6);
+    if (!aligned.length) return result;
+    // 与 refine 同规则剔除碎片框：碎片只污染宽度统计，仍保留在 aligned 里作为
+    // 槽位占据证据（碎片能证明对应槽位有画面内容，剔除会让槽位校验误判）。
+    const maxAlong = Math.max(...aligned.map((frame) => (horizontal ? frame.w : frame.h)));
+    const maxCrossSolid = Math.max(...aligned.map((frame) => (horizontal ? frame.h : frame.w)));
+    const solid = aligned.filter((frame) =>
+      (horizontal ? frame.w : frame.h) >= maxAlong * 0.9
+      || (horizontal ? frame.h : frame.w) >= maxCrossSolid * 0.9
+    );
+    const statsFrames = solid.length ? solid : aligned;
+    const alignedUnion = aligned.reduce((box, frame) => ({
+      x0: Math.min(box.x0, frame.x),
+      y0: Math.min(box.y0, frame.y),
+      x1: Math.max(box.x1, frame.x + frame.w),
+      y1: Math.max(box.y1, frame.y + frame.h)
+    }), { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity });
+    const crossStart = horizontal ? alignedUnion.y0 : alignedUnion.x0;
+    const crossEnd = horizontal ? alignedUnion.y1 : alignedUnion.x1;
+    const mid = (values) => values.slice().sort((a, b) => a - b)[Math.floor((values.length - 1) / 2)];
+    const sizes = statsFrames.map((frame) => (horizontal ? frame.w : frame.h));
+    // 画格尺寸比间距更稳：暗部画格漏检或被切成碎片时，间距序列会被拉长，
+    // 但完整画格的宽度仍接近真实格距。
+    const rough = mid(sizes);
+    const plausible = sizes.filter((size) => size >= rough * 0.55 && size <= rough * 1.8);
+    const pitch = plausible.length ? mid(plausible) : rough;
+    if (!pitch) return result;
+    let alongStart = horizontal ? alignedUnion.x0 : alignedUnion.y0;
+    let alongEnd = horizontal ? alignedUnion.x1 : alignedUnion.y1;
+    const profile = buildLumaProfile(analysis, horizontal);
+    const edgeTolerance = pitch * 0.15;
+    // 漏检画格既可能靠“画面纹理”判定，也可能很暗；后者用画格之间的分隔线暗谷判定。
+    const canExtendTo = (from, to, boundary) => {
+      if (slotHasFrameContent(analysis, from, to, horizontal)) return true;
+      if (boundary <= edgeTolerance || boundary >= alongLength - edgeTolerance) return true;
+      return isStripBoundary(profile, boundary, pitch);
+    };
+    let guard = 0;
+    while (alongStart - pitch >= -pitch * 0.25 && guard < 16 && canExtendTo(alongStart - pitch, alongStart, alongStart - pitch)) {
+      alongStart -= pitch;
+      guard += 1;
+    }
+    while (alongEnd + pitch <= alongLength + pitch * 0.25 && guard < 24 && canExtendTo(alongEnd, alongEnd + pitch, alongEnd + pitch)) {
+      alongEnd += pitch;
+      guard += 1;
+    }
+    if (alongStart <= pitch * 0.5) alongStart = 0;
+    if (alongEnd >= alongLength - pitch * 0.5) alongEnd = alongLength;
+    const span = alongEnd - alongStart;
+    if (span < 24) return result;
+    const crossLimit = crossLength;
+    let crossSize = Math.max(...aligned.map((frame) => (horizontal ? frame.h : frame.w)));
+    if (crossEnd - crossStart >= crossLimit * 0.85) crossSize = crossLimit - crossStart;
+    if (crossSize <= 0) return result;
+
+    // 画格之间的片基缝隙比“检出框宽度”更可靠：暗部漏检/碎片多检会让格距推算差 ±1 格，
+    // 而正确张数的每条内部分隔线都应形成整齐的暗谷。用暗谷得分校正张数。
+    const boundaryStrengthAt = (position, stepSize) => {
+      const at = Math.round(position);
+      if (at <= 2 || at >= profile.length - 3) return 0;
+      const half = Math.max(2, Math.round(stepSize * 0.02));
+      let sep = Infinity;
+      for (let index = Math.max(0, at - half); index <= Math.min(profile.length - 1, at + half); index += 1) sep = Math.min(sep, profile[index]);
+      const gap = Math.max(6, Math.round(stepSize * 0.03));
+      const reach = Math.max(24, Math.round(stepSize * 0.2));
+      const meanAround = (from, to) => {
+        let sum = 0;
+        let total = 0;
+        for (let index = Math.max(0, from); index < Math.min(profile.length, to); index += 1) {
+          sum += profile[index];
+          total += 1;
+        }
+        return total ? sum / total : 0;
+      };
+      const left = meanAround(at - gap - reach, at - gap);
+      const right = meanAround(at + gap, at + gap + reach);
+      const brighter = Math.max(left, right);
+      if (brighter < 8) return 0;
+      return Math.max(0, Math.min(1, (brighter - sep) / brighter));
+    };
+    const scoreCount = (candidate) => {
+      if (candidate < 2 || candidate > 12) return -1;
+      const candidateStep = span / candidate;
+      if (candidateStep < 16) return -1;
+      const candidateAspect = candidateStep / crossSize;
+      if (candidateAspect < 0.85 || candidateAspect > 2.05) return -1;
+      if (Math.abs(candidateStep / pitch - 1) > 0.35) return -1;
+      let total = 0;
+      for (let index = 1; index < candidate; index += 1) total += boundaryStrengthAt(alongStart + candidateStep * index, candidateStep);
+      return total / (candidate - 1);
+    };
+    let count = Math.round(span / pitch);
+    if (count * pitch > span * 1.05) count -= 1;
+    if (count < 2 || count > 12 || span < pitch) return result;
+    if (Math.abs(span / count / pitch - 1) > 0.15) return result;
+    const baseScore = scoreCount(count);
+    let bestCount = count;
+    let bestScore = baseScore;
+    for (let candidate = Math.max(2, count - 2); candidate <= Math.min(12, count + 2); candidate += 1) {
+      if (candidate === count) continue;
+      const score = scoreCount(candidate);
+      if (score > bestScore + 0.15 && score >= 0.55 && score > baseScore * 1.25) {
+        bestScore = score;
+        bestCount = candidate;
+      }
+    }
+    const countCorrected = bestCount !== count;
+    count = bestCount;
+    const step = span / count;
+    if (step < 16) return result;
+    // 重建网格里每个槽位要么已被检出画格占据，要么位于检出范围之外（内容延伸阶段已逐格校验纹理）。
+    // 最多允许 1 个槽位既未检出也未校验；更多则可能是多段胶片或误检，不重建。
+    if (aligned.length >= 2) {
+      const slots = new Set();
+      for (const frame of aligned) {
+        const size = horizontal ? frame.w : frame.h;
+        if (size < step * 0.4) continue;
+        const center = horizontal ? frame.x + frame.w / 2 : frame.y + frame.h / 2;
+        const slot = Math.floor((center - alongStart) / step);
+        if (slot >= 0 && slot < count) slots.add(slot);
+      }
+      const detectedStart = horizontal ? alignedUnion.x0 : alignedUnion.y0;
+      const detectedEnd = horizontal ? alignedUnion.x1 : alignedUnion.y1;
+      let unsupported = 0;
+      for (let index = 0; index < count; index += 1) {
+        if (slots.has(index)) continue;
+        const slotStart = alongStart + step * index;
+        const slotEnd = slotStart + step;
+        const outside = slotEnd <= detectedStart + step * 0.5 || slotStart >= detectedEnd - step * 0.5;
+        if (!outside) unsupported += 1;
+      }
+      if (unsupported > 1) return result;
+    }
+
+    // 相位与宽度仍取自检出框：漏检/碎片/均匀多检会让网格整体偏移、画格偏窄。
+    // 与显式画幅准确的原因同源——对齐物理证据（分隔线暗谷）本身，而不是照搬画幅约束：
+    // 先把网格相位吸附到暗谷，再用暗谷两侧的实际暗带宽度收窄画格，整个过程不依赖画幅假设。
+    const gridScoreAt = (offset) => {
+      let total = 0;
+      for (let index = 1; index < count; index += 1) total += boundaryStrengthAt(alongStart + offset + step * index, step);
+      return total / Math.max(1, count - 1);
+    };
+    let phaseOffset = 0;
+    if (count >= 2 && gridScoreAt(0) < 0.75) {
+      let bestScore = gridScoreAt(0);
+      const limit = Math.round(step / 2);
+      for (let offset = -limit; offset <= limit; offset += 1) {
+        if (offset === 0) continue;
+        const base = alongStart + offset;
+        if (base < -step * 0.3 || base + step * count > alongLength + step * 0.3) continue;
+        const score = gridScoreAt(offset);
+        if (score > bestScore) {
+          bestScore = score;
+          phaseOffset = offset;
+        }
+      }
+      if (gridScoreAt(phaseOffset) >= 0.5) {
+        alongStart = Math.max(0, alongStart + phaseOffset);
+        if (alongStart + step * count > alongLength) alongStart = Math.max(0, alongLength - step * count);
+      } else {
+        phaseOffset = 0;
+      }
+    }
+    const inset = Math.round(options.inset / Math.max(state.scaleX, 0.001));
+    const aspect = crossSize > 0 ? step / crossSize : 0;
+    if (aspect < 0.9 || aspect > 1.95) return result;
+
+    // 检出框数量与张数一致时不能直接采信：暗部扫描的框可能整体偏移或步距错误
+    // （如首格左缘漏检，135 画幅能对齐而自动不能的根源）。
+    // 框已与分隔线网格对齐才维持原结果，否则走同一套网格重建。
+    if (count === aligned.length && gridScoreAt(0) >= 0.75) {
+      const alignedOk = aligned.every((frame) => {
+        const pos = ((horizontal ? frame.x + frame.w / 2 : frame.y + frame.h / 2) - alongStart) / step;
+        return Math.abs(pos - (Math.floor(pos) + 0.5)) <= 0.12;
+      });
+      // 相位对齐还不够：暗部画格会被检出成偏窄偏矮的局部框（如首格 225x115 且 y 从 37 起），
+      // 尺寸不齐时同样要按暗谷重建，否则自动与显式画幅仍会差几像素到几十像素。
+      const alongSizes = aligned.map((frame) => (horizontal ? frame.w : frame.h));
+      const crossSizesOfFrames = aligned.map((frame) => (horizontal ? frame.h : frame.w));
+      const medianAlong = mid(alongSizes);
+      const maxCrossOfFrames = Math.max(...crossSizesOfFrames);
+      const uniformOk = medianAlong > 0 && aligned.every((frame, index) =>
+        Math.abs(alongSizes[index] / medianAlong - 1) <= 0.02
+        && crossSizesOfFrames[index] >= maxCrossOfFrames * 0.95
+      );
+      if (alignedOk && uniformOk) return result;
+    }
+
+    // 与显式画幅共用同一套落点（solidFrameSizes + 中位宽），保证两条路径结果一致。
+    const rebuilt = buildUniformFrames(frames, {
+      horizontal, alongStart, step, count, crossStart, crossSize, pitch, inset, analysis, countCorrected
+    });
+    if (rebuilt.length !== count) return result;
     return {
       ...result,
       frames: rebuilt,
@@ -1916,9 +2297,26 @@
 
   function runDetection(analysis, options) {
     const cropped = cropWhiteMargins(analysis);
+    const snapshot = () => (result?.frames || []).map((frame) => ({
+      x: Math.round(frame.x),
+      y: Math.round(frame.y),
+      w: Math.round(frame.w),
+      h: Math.round(frame.h)
+    }));
+    const diag = {
+      script: document.querySelector('script[src*="app.js"]')?.src || "",
+      analysis: { width: cropped.analysis.width, height: cropped.analysis.height },
+      cropped: { offsetX: cropped.offsetX, offsetY: cropped.offsetY },
+      options,
+      stages: {}
+    };
     let result = detectOnAnalysis(cropped.analysis, options);
+    diag.stages.detected = snapshot();
+    diag.mode = result?.detectionMode || null;
     const format = FILM_FORMATS[options.filmFormat];
     const forcedCount = Math.round(Number(options.frameCount) || 0);
+    const forced = forcedCount >= 2 && forcedCount <= 12;
+    // 渐晕扫描件先按行校正亮度再检测，否则下半部分画格容易被当成片基漏掉。
     if (format || (forcedCount >= 2 && forcedCount <= 12)) {
       const boosted = boostAnalysisForDetection(cropped.analysis);
       if (boosted) {
@@ -1926,6 +2324,11 @@
       }
     }
     result = refineFramesWithExplicitFormat(result, cropped.analysis, options);
+    diag.stages.refined = snapshot();
+    if (!format && !forced && result) {
+      result = normalizeStripToRegularGrid(result, cropped.analysis, options);
+    }
+    diag.stages.normalized = snapshot();
     if (result && options && options.cropScope === "sprocket") {
       result.frames = expandFramesToFilmBorder(result.frames, cropped.analysis, options, result);
     }
@@ -1936,6 +2339,9 @@
         y: frame.y + cropped.offsetY
       }));
     }
+    diag.stages.final = snapshot();
+    window.__filmDiag = diag;
+    console.log("[film-diag]", diag);
     return result;
   }
 
@@ -4910,6 +5316,17 @@
     els.borderCoverageValue.value = `${els.borderCoverage.value}%`;
     els.edgeInsetValue.value = `${els.edgeInset.value} px`;
   }
+
+  els.diagButton?.addEventListener("click", async () => {
+    const text = JSON.stringify(window.__filmDiag ?? {}, null, 2);
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast("诊断信息已复制，请粘贴给开发者");
+    } catch {
+      console.log(text);
+      showToast("复制失败，诊断信息已输出到控制台");
+    }
+  });
 
   let toastTimer = 0;
   function showToast(message) {
