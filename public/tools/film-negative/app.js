@@ -270,6 +270,489 @@
     return { rgb: rgb, source: "manual", confidence: clamp(n / (Math.PI * r * r), 0, 1), samples: n, message: "已手动取样片基（" + n + " 个有效像素）。" };
   }
 
+  // ---------- 透视矫正（翻拍底片自动拉正） ----------
+
+  function medianOf(arr) {
+    if (!arr.length) return 0;
+    var a = arr.slice().sort(function (x, y) { return x - y; });
+    return a[Math.floor((a.length - 1) / 2)];
+  }
+
+  // 稳健直线拟合：isVertical 时拟合 x = a*y + b（竖直边），否则 y = a*x + b（水平边）。
+  // 两轮残差剔除（> 2.5×MAD 视为离群），要求有效点占比达标。
+  function fitRobustLine(pts, isVertical, needCount) {
+    if (!pts || pts.length < Math.max(8, needCount * 0.3)) return null;
+    var usable = pts.slice();
+    var fit = null;
+    for (var round = 0; round < 3; round++) {
+      if (usable.length < 8) break;
+      var n = usable.length;
+      var sx = 0, sy = 0, sxx = 0, sxy = 0;
+      for (var i = 0; i < n; i++) {
+        var px = usable[i].x, py = usable[i].y;
+        if (isVertical) { sx += py; sy += px; sxx += py * py; sxy += py * px; }
+        else { sx += px; sy += py; sxx += px * px; sxy += px * py; }
+      }
+      // 拟合 v = a*u + b
+      var denom = n * sxx - sx * sx;
+      if (Math.abs(denom) < 1e-6) return null;
+      var a = (n * sxy - sx * sy) / denom;
+      var b = (sy - a * sx) / n;
+      fit = { a: a, b: b };
+      var residuals = usable.map(function (pt) {
+        var u = isVertical ? pt.y : pt.x;
+        var v = isVertical ? pt.x : pt.y;
+        return Math.abs(v - (a * u + b));
+      });
+      var mad = medianOf(residuals) || 0.5;
+      var limit = Math.max(2.5, mad * 2.5);
+      var kept = usable.filter(function (_, k) { return residuals[k] <= limit; });
+      if (kept.length < 8 || kept.length === usable.length) { usable = kept.length >= 8 ? kept : usable; break; }
+      usable = kept;
+    }
+    if (!fit || usable.length < needCount * 0.3) return null;
+    fit.count = usable.length;
+    // 内点 RMS 残差：反映边缘本身的直线度（波浪边/软边残差大）
+    var sq = 0;
+    for (var r = 0; r < usable.length; r++) {
+      var ru = isVertical ? usable[r].y : usable[r].x;
+      var rv = isVertical ? usable[r].x : usable[r].y;
+      var rd = rv - (fit.a * ru + fit.b);
+      sq += rd * rd;
+    }
+    fit.rms = Math.sqrt(sq / usable.length);
+    return fit;
+  }
+
+  // 直线交点：hLine 为 y = a*x + b，vLine 为 x = c*y + d
+  function intersectLines(hLine, vLine) {
+    var denom = 1 - hLine.a * vLine.a;
+    if (Math.abs(denom) < 1e-9) return null;
+    var y = (hLine.a * vLine.b + hLine.b) / denom;
+    var x = vLine.a * y + vLine.b;
+    if (!isFinite(x) || !isFinite(y)) return null;
+    return { x: x, y: y };
+  }
+
+  // 3×3 单应矩阵（行主序）：把 from 四点映射到 to 四点
+  function computeHomography(from, to) {
+    var A = [], b = [];
+    for (var i = 0; i < 4; i++) {
+      var x = from[i].x, y = from[i].y, u = to[i].x, v = to[i].y;
+      A.push([x, y, 1, 0, 0, 0, -x * u, -y * u]); b.push(u);
+      A.push([0, 0, 0, x, y, 1, -x * v, -y * v]); b.push(v);
+    }
+    // 高斯消元解 8 元线性方程组
+    var n = 8;
+    for (var col = 0; col < n; col++) {
+      var piv = col;
+      for (var r = col + 1; r < n; r++) if (Math.abs(A[r][col]) > Math.abs(A[piv][col])) piv = r;
+      if (Math.abs(A[piv][col]) < 1e-10) return null;
+      var tmp = A[col]; A[col] = A[piv]; A[piv] = tmp;
+      var tb = b[col]; b[col] = b[piv]; b[piv] = tb;
+      for (var r2 = col + 1; r2 < n; r2++) {
+        var f = A[r2][col] / A[col][col];
+        if (!f) continue;
+        for (var c = col; c < n; c++) A[r2][c] -= f * A[col][c];
+        b[r2] -= f * b[col];
+      }
+    }
+    var h = new Array(9).fill(0);
+    for (var r3 = n - 1; r3 >= 0; r3--) {
+      var sum = b[r3];
+      for (var c2 = r3 + 1; c2 < n; c2++) sum -= A[r3][c2] * h[c2];
+      h[r3] = sum / A[r3][r3];
+    }
+    h[8] = 1;
+    return h;
+  }
+
+  function applyHomography(h, x, y) {
+    var u = h[0] * x + h[1] * y + h[2];
+    var v = h[3] * x + h[4] * y + h[5];
+    var t = h[6] * x + h[7] * y + h[8];
+    if (Math.abs(t) < 1e-9) return null;
+    return { x: u / t, y: v / t };
+  }
+
+  // 仿射变换：源三角形 → 目标三角形（供 canvas transform 使用）
+  function affineFromTriangles(sp, dp) {
+    var x1 = sp[0].x, y1 = sp[0].y, x2 = sp[1].x, y2 = sp[1].y, x3 = sp[2].x, y3 = sp[2].y;
+    var u1 = dp[0].x, v1 = dp[0].y, u2 = dp[1].x, v2 = dp[1].y, u3 = dp[2].x, v3 = dp[2].y;
+    var den = (x2 - x1) * (y3 - y1) - (x3 - x1) * (y2 - y1);
+    if (Math.abs(den) < 1e-9) return null;
+    var a = ((u2 - u1) * (y3 - y1) - (u3 - u1) * (y2 - y1)) / den;
+    var c = ((u3 - u1) * (x2 - x1) - (u2 - u1) * (x3 - x1)) / den;
+    var e = u1 - a * x1 - c * y1;
+    var b = ((v2 - v1) * (y3 - y1) - (v3 - v1) * (y2 - y1)) / den;
+    var d = ((v3 - v1) * (x2 - x1) - (v2 - v1) * (x3 - x1)) / den;
+    var f = v1 - b * x1 - d * y1;
+    return { a: a, b: b, c: c, d: d, e: e, f: f };
+  }
+
+  // 把 source 中 quad（TL,TR,BR,BL，源像素坐标）透视拉正为矩形画布。
+  // 输出尺寸取对边平均长度；用三角网格近似单应，细分粒度随尺寸自适应。
+  function warpQuadToCanvas(source, quad) {
+    var topW = Math.hypot(quad[1].x - quad[0].x, quad[1].y - quad[0].y);
+    var botW = Math.hypot(quad[3].x - quad[2].x, quad[3].y - quad[2].y);
+    var leftH = Math.hypot(quad[3].x - quad[0].x, quad[3].y - quad[0].y);
+    var rightH = Math.hypot(quad[2].x - quad[1].x, quad[2].y - quad[1].y);
+    var outW = clamp(Math.round((topW + botW) / 2), 8, 16384);
+    var outH = clamp(Math.round((leftH + rightH) / 2), 8, 16384);
+    var dstCorners = [{ x: 0, y: 0 }, { x: outW, y: 0 }, { x: outW, y: outH }, { x: 0, y: outH }];
+    var H = computeHomography(dstCorners, quad);
+    if (!H) return null;
+    var cnv = document.createElement("canvas");
+    cnv.width = outW;
+    cnv.height = outH;
+    var ctx = cnv.getContext("2d");
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    var nx = clamp(Math.round(outW / 70), 6, 22);
+    var ny = clamp(Math.round(outH / 70), 6, 22);
+    var dilate = 0.6; // 三角形外扩，避免接缝
+    function drawTri(sp, dp) {
+      var t = affineFromTriangles(sp, dp);
+      if (!t) return;
+      var cx = (dp[0].x + dp[1].x + dp[2].x) / 3;
+      var cy = (dp[0].y + dp[1].y + dp[2].y) / 3;
+      ctx.save();
+      ctx.beginPath();
+      for (var k = 0; k < 3; k++) {
+        var vx = dp[k].x + Math.sign(dp[k].x - cx || 1) * dilate;
+        var vy = dp[k].y + Math.sign(dp[k].y - cy || 1) * dilate;
+        if (k === 0) ctx.moveTo(vx, vy); else ctx.lineTo(vx, vy);
+      }
+      ctx.closePath();
+      ctx.clip();
+      ctx.transform(t.a, t.b, t.c, t.d, t.e, t.f);
+      ctx.drawImage(source, 0, 0);
+      ctx.restore();
+    }
+    for (var j = 0; j < ny; j++) {
+      for (var i = 0; i < nx; i++) {
+        var dPts = [
+          { x: outW * i / nx, y: outH * j / ny },
+          { x: outW * (i + 1) / nx, y: outH * j / ny },
+          { x: outW * (i + 1) / nx, y: outH * (j + 1) / ny },
+          { x: outW * i / nx, y: outH * (j + 1) / ny }
+        ];
+        var sPts = dPts.map(function (pt) { return applyHomography(H, pt.x, pt.y); });
+        if (sPts.some(function (pt) { return !pt; })) continue;
+        drawTri([sPts[0], sPts[1], sPts[2]], [dPts[0], dPts[1], dPts[2]]);
+        drawTri([sPts[0], sPts[2], sPts[3]], [dPts[0], dPts[2], dPts[3]]);
+      }
+    }
+    return cnv;
+  }
+
+  // 局部边缘抚直（PS 自适应思路）：锚定画面中心带（中心 25% 半幅零位移），
+  // 仅把弯曲的边缘拉回各自的拟合直线。弯曲量从中心到边缘平滑衰减施加，
+  // 即使边缘检测带噪声也绝不会把画面中心扭歪。
+  function straightenEdgesLocally(source, persp) {
+    var W = source.width, H = source.height;
+    var q = persp.quad;
+    var TL = { x: q[0].x * W, y: q[0].y * H };
+    var TR = { x: q[1].x * W, y: q[1].y * H };
+    var BR = { x: q[2].x * W, y: q[2].y * H };
+    var BL = { x: q[3].x * W, y: q[3].y * H };
+    var outW = clamp(Math.round((Math.hypot(TR.x - TL.x, TR.y - TL.y) + Math.hypot(BR.x - BL.x, BR.y - BL.y)) / 2), 8, 16384);
+    var outH = clamp(Math.round((Math.hypot(BL.x - TL.x, BL.y - TL.y) + Math.hypot(BR.x - TR.x, BR.y - TR.y)) / 2), 8, 16384);
+    var sctx = source.getContext("2d");
+    var sd = sctx.getImageData(0, 0, W, H).data;
+    var cnv = document.createElement("canvas");
+    cnv.width = outW; cnv.height = outH;
+    var octx = cnv.getContext("2d");
+    var od = octx.createImageData(outW, outH);
+    var dd = od.data;
+    var ed = persp.edgeData || {};
+    var TN = 256;
+    function samp(tab, t) {
+      if (!tab) return 0;
+      var f = clamp(t, 0, 1) * (TN - 1);
+      var i = Math.floor(f), j = i + 1 < TN ? i + 1 : i, r = f - i;
+      return tab[i] * (1 - r) + tab[j] * r;
+    }
+    function sm(a, b, x) { x = clamp((x - a) / (b - a), 0, 1); return x * x * (3 - 2 * x); }
+    // 预计算：每行左右偏差（px）、每列上下偏差（px）与锚定权重
+    var dL = new Float32Array(outH), dR = new Float32Array(outH);
+    var wT = new Float32Array(outH), wB = new Float32Array(outH);
+    for (var yo = 0; yo < outH; yo++) {
+      var fy = yo / outH;
+      dL[yo] = samp(ed.left, fy) * W;
+      dR[yo] = samp(ed.right, fy) * W;
+      wT[yo] = sm(0.25, 1, clamp((0.5 - fy) / 0.5, 0, 1));
+      wB[yo] = sm(0.25, 1, clamp((fy - 0.5) / 0.5, 0, 1));
+    }
+    var dT = new Float32Array(outW), dB = new Float32Array(outW);
+    var wL = new Float32Array(outW), wR = new Float32Array(outW);
+    for (var xo = 0; xo < outW; xo++) {
+      var fx = xo / outW;
+      dT[xo] = samp(ed.top, fx) * H;
+      dB[xo] = samp(ed.bottom, fx) * H;
+      wL[xo] = sm(0.25, 1, clamp((0.5 - fx) / 0.5, 0, 1));
+      wR[xo] = sm(0.25, 1, clamp((fx - 0.5) / 0.5, 0, 1));
+    }
+    // 逐像素反向采样：输出(直线边界) → 源(弯曲边界)，位移 = 边缘偏差 × 锚定权重
+    for (var y2 = 0; y2 < outH; y2++) {
+      var ay = 1 - y2 / outH, by = y2 / outH;
+      for (var x2 = 0; x2 < outW; x2++) {
+        var fx2 = x2 / outW;
+        var xs = (TL.x * (1 - fx2) + TR.x * fx2) * ay + (BL.x * (1 - fx2) + BR.x * fx2) * by;
+        var ys = (TL.y * (1 - fx2) + TR.y * fx2) * ay + (BL.y * (1 - fx2) + BR.y * fx2) * by;
+        var u = dL[y2] * wL[x2] + dR[y2] * wR[x2];
+        var v = dT[x2] * wT[y2] + dB[x2] * wB[y2];
+        var xi = xs + u, yi = ys + v;
+        var x0 = Math.floor(xi), y0 = Math.floor(yi);
+        var rx = xi - x0, ry = yi - y0;
+        var x0c = clamp(x0, 0, W - 1), x1c = clamp(x0 + 1, 0, W - 1);
+        var y0c = clamp(y0, 0, H - 1), y1c = clamp(y0 + 1, 0, H - 1);
+        var i00 = (y0c * W + x0c) * 4, i10 = (y0c * W + x1c) * 4;
+        var i01 = (y1c * W + x0c) * 4, i11 = (y1c * W + x1c) * 4;
+        var o2 = (y2 * outW + x2) * 4;
+        var w00 = (1 - rx) * (1 - ry), w10 = rx * (1 - ry), w01 = (1 - rx) * ry, w11 = rx * ry;
+        dd[o2] = sd[i00] * w00 + sd[i10] * w10 + sd[i01] * w01 + sd[i11] * w11;
+        dd[o2 + 1] = sd[i00 + 1] * w00 + sd[i10 + 1] * w10 + sd[i01 + 1] * w01 + sd[i11 + 1] * w11;
+        dd[o2 + 2] = sd[i00 + 2] * w00 + sd[i10 + 2] * w10 + sd[i01 + 2] * w01 + sd[i11 + 2] * w11;
+        dd[o2 + 3] = sd[i00 + 3] * w00 + sd[i10 + 3] * w10 + sd[i01 + 3] * w01 + sd[i11 + 3] * w11;
+      }
+    }
+    octx.putImageData(od, 0, 0);
+    return cnv;
+  }
+
+  // 透视矫正统一入口：local 走锚定中心的边缘抚直，global 走单应拉正
+  function warpPerspectiveCanvas(cnv, persp) {
+    if (!persp || !persp.quad || !persp.on) return null;
+    if (persp.mode === "local" && persp.edgeData) {
+      return straightenEdgesLocally(cnv, persp);
+    }
+    var W = cnv.width, H = cnv.height;
+    var quadPx = persp.quad.map(function (pt) { return { x: pt.x * W, y: pt.y * H }; });
+    return warpQuadToCanvas(cnv, quadPx);
+  }
+
+  // 翻拍底片四边形检测：以画面边缘的亮背景为参照定位底片四条边。
+  // 返回 null 表示无法可靠检测；quad 为归一化坐标（TL,TR,BR,BL）。
+  function detectPerspectiveQuad(data, w, h) {
+    if (w < 80 || h < 60) return null;
+    var luma = new Uint8Array(w * h);
+    for (var p = 0; p < w * h; p++) {
+      var o = p * 4;
+      luma[p] = data[o + 3] === 0 ? 255 : lum8(data[o], data[o + 1], data[o + 2]);
+    }
+    var bw = Math.max(3, Math.round(w * 0.05));
+    var bh = Math.max(3, Math.round(h * 0.05));
+    var borderL = [], centerL = [];
+    var cx0 = Math.round(w * 0.3), cx1 = Math.round(w * 0.7);
+    var cy0 = Math.round(h * 0.3), cy1 = Math.round(h * 0.7);
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        var v = luma[y * w + x];
+        var isBorder = x < bw || x >= w - bw || y < bh || y >= h - bh;
+        if (isBorder) borderL.push(v);
+        else if (x >= cx0 && x < cx1 && y >= cy0 && y < cy1) centerL.push(v);
+      }
+    }
+    if (borderL.length < 40 || centerL.length < 40) return null;
+    var borderMed = medianOf(borderL);
+    var centerMed = medianOf(centerL);
+    if (Math.abs(borderMed - centerMed) < 16) return null;
+    var filmDark = centerMed < borderMed;
+    var th = filmDark ? lerp(centerMed, borderMed, 0.55) : lerp(borderMed, centerMed, 0.55);
+    var isFilm = function (v) { return filmDark ? v < th : v > th; };
+    // 校验：中心过半是底片、边框过半是背景，否则视为无法区分
+    var centerFilm = 0, centerN = 0, borderBg = 0, borderN = 0;
+    for (var yy = 0; yy < h; yy += 2) {
+      for (var xx = 0; xx < w; xx += 2) {
+        var vv = luma[yy * w + xx];
+        var inC = xx >= cx0 && xx < cx1 && yy >= cy0 && yy < cy1;
+        var inB = xx < bw || xx >= w - bw || yy < bh || yy >= h - bh;
+        if (inC) { centerN++; if (isFilm(vv)) centerFilm++; }
+        else if (inB) { borderN++; if (!isFilm(vv)) borderBg++; }
+      }
+    }
+    if (centerN < 50 || borderN < 50) return null;
+    if (centerFilm / centerN < 0.5 || borderBg / borderN < 0.55) return null;
+
+    // 逐行找左右边缘、逐列找上下边缘（连续 3px 命中才算，抑制噪点）
+    var run = 3;
+    var leftPts = [], rightPts = [], topPts = [], botPts = [];
+    for (var ry = 0; ry < h; ry++) {
+      var lx = -1;
+      for (var xi = 0; xi <= w - run; xi++) {
+        var ok = true;
+        for (var k = 0; k < run; k++) if (!isFilm(luma[ry * w + xi + k])) { ok = false; break; }
+        if (ok) { lx = xi; break; }
+      }
+      if (lx >= 0) leftPts.push({ x: lx, y: ry });
+      var rx = -1;
+      for (var xi2 = w - run; xi2 >= 0; xi2--) {
+        var ok2 = true;
+        for (var k2 = 0; k2 < run; k2++) if (!isFilm(luma[ry * w + xi2 + k2])) { ok2 = false; break; }
+        if (ok2) { rx = xi2 + run - 1; break; }
+      }
+      if (rx >= 0) rightPts.push({ x: rx, y: ry });
+    }
+    for (var cx = 0; cx < w; cx++) {
+      var ty = -1;
+      for (var yi = 0; yi <= h - run; yi++) {
+        var ok3 = true;
+        for (var k3 = 0; k3 < run; k3++) if (!isFilm(luma[(yi + k3) * w + cx])) { ok3 = false; break; }
+        if (ok3) { ty = yi; break; }
+      }
+      if (ty >= 0) topPts.push({ x: cx, y: ty });
+      var by = -1;
+      for (var yi2 = h - run; yi2 >= 0; yi2--) {
+        var ok4 = true;
+        for (var k4 = 0; k4 < run; k4++) if (!isFilm(luma[(yi2 + k4) * w + cx])) { ok4 = false; break; }
+        if (ok4) { by = yi2; break; }
+      }
+      if (by >= 0) botPts.push({ x: cx, y: by });
+    }
+
+    var topLine = fitRobustLine(topPts, false, Math.round(w * 0.25));
+    var botLine = fitRobustLine(botPts, false, Math.round(w * 0.25));
+    if (!topLine || !botLine) return null; // 上下边必须存在
+    var leftLine = fitRobustLine(leftPts, true, Math.round(h * 0.2));
+    var rightLine = fitRobustLine(rightPts, true, Math.round(h * 0.2));
+    var leftBorder = { a: 0, b: 0 };   // x = 0
+    var rightBorder = { a: 0, b: w };  // x = w
+    var lLine = leftLine || leftBorder;
+    var rLine = rightLine || rightBorder;
+
+    var TL = intersectLines(topLine, lLine);
+    var TR = intersectLines(topLine, rLine);
+    var BR = intersectLines(botLine, rLine);
+    var BL = intersectLines(botLine, lLine);
+    if (!TL || !TR || !BR || !BL) return null;
+
+    // 四边形合法性：凸四边形、面积足够、位置合理（允许略越界）
+    var quad = [TL, TR, BR, BL];
+    var area = 0;
+    for (var q = 0; q < 4; q++) {
+      var p1 = quad[q], p2 = quad[(q + 1) % 4];
+      area += p1.x * p2.y - p2.x * p1.y;
+    }
+    area = Math.abs(area) / 2;
+    if (area < w * h * 0.25) return null;
+    for (var q2 = 0; q2 < 4; q2++) {
+      var pt = quad[q2];
+      if (pt.x < -w * 0.06 || pt.x > w * 1.06 || pt.y < -h * 0.06 || pt.y > h * 1.06) return null;
+    }
+    if (BL.y <= TL.y + h * 0.05 || BR.y <= TR.y + h * 0.05) return null;
+
+    // 量化指标：旋转角（度）、上下边/左右边的高度差与宽度差
+    var angleDeg = Math.atan((topLine.a + botLine.a) / 2) * 180 / Math.PI;
+    var lH = Math.hypot(BL.x - TL.x, BL.y - TL.y);
+    var rH = Math.hypot(BR.x - TR.x, BR.y - TR.y);
+    var tW = Math.hypot(TR.x - TL.x, TR.y - TL.y);
+    var bW = Math.hypot(BR.x - BL.x, BR.y - BL.y);
+    var keystone = Math.abs(rH - lH) / Math.max(1, (lH + rH) / 2);
+    var trapezoid = Math.abs(tW - bW) / Math.max(1, (tW + bW) / 2);
+    // —— 模式判定（PS 自适应思路）——
+    // global：四边直且存在真实透视（大畸变需信噪比达标，小畸变需合成级完美直线）
+    // local ：边缘弯曲（扫描波浪边）——锚定画面中心，仅把弯曲边缘拉回自己的拟合直线
+    // none  ：无可信畸变，不动
+    var rmsLimit = Math.max(2, w * 0.004);
+    var strictLimit = Math.max(1.5, w * 0.002); // 合成图级完美直线才允许小角度自动拉正
+    var topRms = topLine.rms, botRms = botLine.rms;
+    var leftRms = leftLine ? leftLine.rms : 0, rightRms = rightLine ? rightLine.rms : 0;
+    var bentTop = topRms > rmsLimit, bentBot = botRms > rmsLimit;
+    var bentLeft = !!leftLine && leftRms > rmsLimit, bentRight = !!rightLine && rightRms > rmsLimit;
+    var anyBent = bentTop || bentBot || bentLeft || bentRight;
+    var allStraight = !anyBent;
+
+    // 大畸变 + 信噪比：畸变幅度必须远超（6 倍）对应边缘的拟合噪声，
+    // 否则弯曲边/软边拟合出的虚假大畸变不可信
+    var keyAmp = Math.abs(rH - lH);
+    var trapAmp = Math.abs(tW - bW);
+    var angAmp = Math.tan(Math.abs(angleDeg) * Math.PI / 180) * w;
+    var bigDistortion = leftLine && rightLine && (
+      (keystone > 0.08 && keyAmp > 6 * Math.max(leftRms, rightRms, 1)) ||
+      (trapezoid > 0.08 && trapAmp > 6 * Math.max(topRms, botRms, 1)) ||
+      (Math.abs(angleDeg) > 3 && angAmp > 6 * Math.max(topRms, botRms, 1))
+    );
+
+    // 弯边逐点偏差表（归一化：位置 0..1 沿边 → 偏差/边长方向尺寸），供局部抚直用
+    var TABLE_N = 256;
+    function buildEdgeTable(pts, line, isV) {
+      var acc = new Float32Array(TABLE_N), cnt = new Uint16Array(TABLE_N);
+      for (var i = 0; i < pts.length; i++) {
+        var p = pts[i], t, d;
+        if (isV) { t = p.y / h; d = (p.x - (line.a * p.y + line.b)) / w; }
+        else { t = p.x / w; d = (p.y - (line.a * p.x + line.b)) / h; }
+        // 剔除离群点：与拟合线偏差过大（>3 倍限差）的坏点不进偏差表
+        if (Math.abs(d) * (isV ? w : h) > rmsLimit * 3) continue;
+        var idx = clamp(Math.round(t * (TABLE_N - 1)), 0, TABLE_N - 1);
+        acc[idx] += d; cnt[idx]++;
+      }
+      var v = new Float32Array(TABLE_N);
+      for (var k = 0; k < TABLE_N; k++) if (cnt[k]) v[k] = acc[k] / cnt[k];
+      // 空槽线性插值；两端无样本保持 0（边缘缺失段不动）
+      var last = -1;
+      for (var k2 = 0; k2 < TABLE_N; k2++) {
+        if (cnt[k2]) {
+          if (last >= 0 && k2 - last > 1) {
+            for (var m = last + 1; m < k2; m++) v[m] = v[last] + (v[k2] - v[last]) * (m - last) / (k2 - last);
+          }
+          last = k2;
+        }
+      }
+      return v;
+    }
+    var edgeData = null, ampPx = 0;
+    if (anyBent) {
+      edgeData = {
+        left: bentLeft ? buildEdgeTable(leftPts, leftLine, true) : null,
+        right: bentRight ? buildEdgeTable(rightPts, rightLine, true) : null,
+        top: bentTop ? buildEdgeTable(topPts, topLine, false) : null,
+        bottom: bentBot ? buildEdgeTable(botPts, botLine, false) : null
+      };
+      for (var side in edgeData) {
+        if (!edgeData[side]) continue;
+        var scale = (side === 'left' || side === 'right') ? w : h;
+        for (var ti = 0; ti < TABLE_N; ti++) {
+          ampPx = Math.max(ampPx, Math.abs(edgeData[side][ti]) * scale);
+        }
+      }
+    }
+
+    var mode = 'none', significant = false;
+    if (bigDistortion) {
+      mode = 'global'; significant = true;   // 大畸变且信噪比达标：全局拉正
+    } else if (anyBent && ampPx >= 2) {
+      mode = 'local'; significant = true;    // 边缘弯曲：锚定中心，仅抚直边缘
+    } else if (allStraight && Math.max(topRms, botRms) <= strictLimit &&
+      (Math.abs(angleDeg) > 0.8 || trapezoid > 0.015)) {
+      mode = 'global'; significant = true;   // 完美直线上的小畸变（合成/数码图）
+    } else if (allStraight && leftLine && rightLine && Math.max(leftRms, rightRms) <= strictLimit &&
+      keystone > 0.015) {
+      mode = 'global'; significant = true;
+    }
+    var edgeStable = allStraight;
+    var edgeRms = Math.max(topRms, botRms, leftRms, rightRms);
+    var confidence = clamp((topLine.count / w + botLine.count / w) / 2, 0, 1);
+    return {
+      quad: quad.map(function (pt) { return { x: pt.x / w, y: pt.y / h }; }),
+      angleDeg: angleDeg,
+      keystone: keystone,
+      trapezoid: trapezoid,
+      confidence: confidence,
+      edgeStable: edgeStable,
+      edgeRms: edgeRms,
+      topRms: topRms,
+      botRms: botRms,
+      leftRms: leftRms,
+      rightRms: rightRms,
+      rmsLimit: rmsLimit,
+      mode: mode,
+      edgeData: edgeData,
+      ampPx: ampPx,
+      significant: significant
+    };
+  }
+
   // 亮度自适应饱和
   function applySaturation(r, g, b, sat, out) {
     var l = lum01(r, g, b);
@@ -874,10 +1357,25 @@
     curve: defaultCurve(),   // 曲线控制点 {rgb,r,g,b}
     curveChannel: "rgb",     // 当前编辑的曲线通道
     curveHist: null,         // 曲线面板背景直方图 {r,g,b,luma}
+    perspective: null,
+    perspEditing: false,
+    perspEditBackup: null,
+    plainData: null,
+    plainW: 0,
+    plainH: 0,       // 透视矫正 {quad(归一化), on, off, angle, keystone, trapezoid, confidence}
   };
 
   var el = {
     dropZone: document.getElementById("drop-zone"),
+    perspEnabled: document.getElementById("persp-enabled"),
+    perspInfo: document.getElementById("persp-info"),
+    perspActions: document.getElementById("persp-actions"),
+    perspEditActions: document.getElementById("persp-edit-actions"),
+    btnPerspAdjust: document.getElementById("btn-persp-adjust"),
+    btnPerspDone: document.getElementById("btn-persp-done"),
+    btnPerspCancel: document.getElementById("btn-persp-cancel"),
+    btnPerspRedetect: document.getElementById("btn-persp-redetect"),
+    perspOverlay: document.getElementById("persp-overlay"),
     fileInput: document.getElementById("file-input"),
     canvasWrap: document.getElementById("canvas-wrap"),
     canvas: document.getElementById("canvas"),
@@ -967,6 +1465,203 @@
   state.adj = defaultAdjustments();
 
   function setStatus(text) { el.status.textContent = text; }
+
+  // ---------- 透视矫正 UI ----------
+
+  function updatePerspectiveUI() {
+    if (!el.perspEnabled) return;
+    var p = state.perspective;
+    var hasImg = !!state.previewData;
+    var editing = state.perspEditing;
+    if (el.perspActions) el.perspActions.hidden = editing;
+    if (el.perspEditActions) el.perspEditActions.hidden = !editing;
+    if (el.btnPerspAdjust) el.btnPerspAdjust.disabled = !hasImg || editing;
+    if (el.btnPerspRedetect) el.btnPerspRedetect.disabled = !hasImg || editing;
+    el.perspEnabled.disabled = editing || !hasImg || !p || !p.quad;
+    el.perspEnabled.checked = !!(p && p.quad && p.on);
+    if (!el.perspInfo) return;
+    if (editing) {
+      el.perspInfo.textContent = "拖动四角锚点框住底片画面";
+    } else if (!hasImg) {
+      el.perspInfo.textContent = "—";
+    } else if (!p || (!p.quad && !p.off)) {
+      el.perspInfo.textContent = "未检测到清晰边缘";
+    } else if (p.off) {
+      el.perspInfo.textContent = "已关闭（可重新检测）";
+    } else if (p.mode === "local") {
+      el.perspInfo.textContent = "边缘弯曲 " + (Math.round((p.ampPx || 0) * 10) / 10).toFixed(1) + " px"
+        + (p.on ? " · 已抚直" : " · 默认关闭");
+    } else {
+      var msg = "旋转 " + (Math.round(p.angle * 10) / 10).toFixed(1) + "° · 梯形 "
+        + (Math.round(Math.max(p.keystone, p.trapezoid) * 1000) / 10).toFixed(1) + "%";
+      el.perspInfo.textContent = p.on ? msg + " · 已拉正"
+        : (p.straight ? "基本平直" : msg + " · 默认关闭");
+    }
+  }
+
+  // 重建编辑器（透视开关/重新检测/关闭共用）：自动片基在新几何上重算
+  function applyPerspectiveChange(item, mutate) {
+    if (!item || !state.bitmap) return;
+    mutate(item);
+    if (!item.baseSource || item.baseSource === "auto") item.base = null;
+    setupEditorFromBitmap(state.bitmap, item);
+  }
+
+  function bindPerspectiveEvents() {
+    if (el.perspEnabled) el.perspEnabled.addEventListener("change", function () {
+      if (state.perspEditing) return;
+      var cur = currentItem();
+      if (!cur || !cur.perspective || !cur.perspective.quad) return;
+      var on = el.perspEnabled.checked;
+      applyPerspectiveChange(cur, function (it) { it.perspective.on = on; });
+    });
+    if (el.btnPerspRedetect) el.btnPerspRedetect.addEventListener("click", function () {
+      if (state.perspEditing) return;
+      var cur = currentItem();
+      if (!cur) return;
+      applyPerspectiveChange(cur, function (it) { it.perspective = null; });
+    });
+    if (el.btnPerspAdjust) el.btnPerspAdjust.addEventListener("click", enterPerspEdit);
+    if (el.btnPerspDone) el.btnPerspDone.addEventListener("click", function () { exitPerspEdit(true); });
+    if (el.btnPerspCancel) el.btnPerspCancel.addEventListener("click", function () { exitPerspEdit(false); });
+    // 四角锚点拖拽（PS 手动变换式）
+    if (el.perspOverlay) {
+      var dragIdx = -1;
+      el.perspOverlay.addEventListener("pointerdown", function (e) {
+        var a = e.target && e.target.closest ? e.target.closest(".persp-anchor") : null;
+        if (!a) return;
+        dragIdx = parseInt(a.getAttribute("data-anchor"), 10);
+        try { el.perspOverlay.setPointerCapture(e.pointerId); } catch (err) { /* 忽略 */ }
+        e.preventDefault();
+      });
+      el.perspOverlay.addEventListener("pointermove", function (e) {
+        if (dragIdx < 0) return;
+        var r = el.canvas.getBoundingClientRect();
+        if (!r.width || !r.height) return;
+        var x = clamp((e.clientX - r.left) / r.width, 0, 1);
+        var y = clamp((e.clientY - r.top) / r.height, 0, 1);
+        var it = currentItem();
+        if (!it || !it.perspective || !it.perspective.quad) return;
+        it.perspective.quad[dragIdx] = { x: x, y: y };
+        updatePerspOverlay();
+      });
+      function endDrag() { dragIdx = -1; }
+      el.perspOverlay.addEventListener("pointerup", endDrag);
+      el.perspOverlay.addEventListener("pointercancel", endDrag);
+    }
+  }
+  bindPerspectiveEvents();
+
+  // ---- 透视手动编辑态（PS 式锚点矫正） ----
+
+  // 叠加层几何与锚点位置同步（四边形 + 3×3 透视网格参考线）
+  function updatePerspOverlay() {
+    if (!el.perspOverlay) return;
+    if (!state.perspEditing) { el.perspOverlay.hidden = true; return; }
+    var it = currentItem();
+    var p = it && it.perspective;
+    if (!p || !p.quad) { el.perspOverlay.hidden = true; return; }
+    var cv = el.canvas;
+    el.perspOverlay.hidden = false;
+    el.perspOverlay.style.left = cv.offsetLeft + "px";
+    el.perspOverlay.style.top = cv.offsetTop + "px";
+    el.perspOverlay.style.width = cv.offsetWidth + "px";
+    el.perspOverlay.style.height = cv.offsetHeight + "px";
+    var W = cv.offsetWidth, H = cv.offsetHeight;
+    var pts = p.quad.map(function (q) { return { x: q.x * W, y: q.y * H }; });
+    el.perspOverlay.querySelectorAll(".persp-anchor").forEach(function (a) {
+      var i = parseInt(a.getAttribute("data-anchor"), 10);
+      a.style.left = pts[i].x + "px";
+      a.style.top = pts[i].y + "px";
+    });
+    function blerp(u, v) {
+      var tl = pts[0], tr = pts[1], br = pts[2], bl = pts[3];
+      return {
+        x: tl.x * (1 - u) * (1 - v) + tr.x * u * (1 - v) + br.x * u * v + bl.x * (1 - u) * v,
+        y: tl.y * (1 - u) * (1 - v) + tr.y * u * (1 - v) + br.y * u * v + bl.y * (1 - u) * v
+      };
+    }
+    function polyStr(list) {
+      return list.map(function (pt) { return pt.x.toFixed(1) + "," + pt.y.toFixed(1); }).join(" ");
+    }
+    var svg = "";
+    var outer = [blerp(0, 0), blerp(1, 0), blerp(1, 1), blerp(0, 1)];
+    svg += '<polygon points="' + polyStr(outer) + '" fill="rgba(255,255,255,0.04)" stroke="#fff" stroke-width="1.5"/>';
+    for (var g = 1; g <= 2; g++) {
+      var t = g / 3;
+      var col = [], row = [];
+      for (var k = 0; k <= 12; k++) {
+        var u = k / 12;
+        col.push(blerp(u, t));
+        row.push(blerp(t, u));
+      }
+      svg += '<polyline points="' + polyStr(col) + '" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="1"/>';
+      svg += '<polyline points="' + polyStr(row) + '" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="1"/>';
+    }
+    var grid = el.perspOverlay.querySelector("svg");
+    if (grid) grid.innerHTML = svg;
+  }
+
+  // 进入手动矫正：画布切回未矫正原图，显示锚点叠加层
+  function enterPerspEdit() {
+    var it = currentItem();
+    if (!it || !state.bitmap || !state.plainData || state.perspEditing) return;
+    state.perspEditing = true;
+    state.perspEditBackup = it.perspective ? JSON.parse(JSON.stringify(it.perspective)) : null;
+    if (!it.perspective || !it.perspective.quad) {
+      it.perspective = { quad: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }], on: false, off: false, mode: "manual" };
+    }
+    // 画布显示未矫正原图
+    el.canvas.width = state.plainW;
+    el.canvas.height = state.plainH;
+    canvasCtx.putImageData(state.plainData, 0, 0);
+    state.previewW = state.plainW;
+    state.previewH = state.plainH;
+    // 退出裁剪编辑，避免叠加层冲突
+    state.cropEditing = false;
+    if (el.cropBar) el.cropBar.hidden = true;
+    if (el.cropOverlay) el.cropOverlay.hidden = true;
+    updatePerspOverlay();
+    updatePerspectiveUI();
+    setStatus("手动矫正：拖动四角锚点框住底片画面，完成后点「完成」应用");
+  }
+
+  // 退出手动矫正：commit 应用当前锚点并开启矫正，cancel 恢复进入前状态
+  function exitPerspEdit(commit) {
+    var it = currentItem();
+    if (!it || !state.perspEditing) return;
+    var backup = state.perspEditBackup;
+    state.perspEditing = false;
+    state.perspEditBackup = null;
+    if (el.perspOverlay) el.perspOverlay.hidden = true;
+    if (commit) {
+      applyPerspectiveChange(it, function (t) {
+        t.perspective.on = true;
+        t.perspective.mode = "manual";
+      });
+      setStatus("已按手动锚点矫正");
+    } else {
+      applyPerspectiveChange(it, function (t) { t.perspective = backup; });
+      setStatus("");
+    }
+    updatePerspectiveUI();
+  }
+
+  // 自测钩子（?selftest=1）：暴露透视检测结果与预览尺寸
+  if (location.search.indexOf("selftest=1") >= 0) {
+    window.__fnSelftest = {
+      perspective: function () { return state.perspective ? JSON.parse(JSON.stringify(state.perspective)) : null; },
+      previewSize: function () { return { w: state.previewW, h: state.previewH, full: { w: state.fullW, h: state.fullH } }; },
+      status: function () { return el.status ? el.status.textContent : ""; },
+      editing: function () { return !!state.perspEditing; },
+      centerPixel: function () {
+        var w = state.previewW, h = state.previewH;
+        if (!state.previewData || !w || !h) return null;
+        var d = state.previewData.data, x = Math.floor(w / 2), y = Math.floor(h / 2), i = (y * w + x) * 4;
+        return [d[i], d[i + 1], d[i + 2]];
+      }
+    };
+  }
 
   function updateBaseUI() {
     var r = state.base[0], g = state.base[1], b = state.base[2];
@@ -1124,7 +1819,7 @@
     var stageEl = document.querySelector(".stage-inner");
     if (!stageEl) return;
     var availW = Math.max(160, stageEl.clientWidth);
-    var availH = Math.max(240, window.innerHeight * 0.78);
+    var availH = stageEl.clientHeight > 60 ? stageEl.clientHeight : Math.max(240, window.innerHeight * 0.78);
     var cw = el.canvas.width || 1, ch = el.canvas.height || 1;
     var ar = cw / ch;
     var w = Math.min(availW, availH * ar);
@@ -1379,8 +2074,15 @@
     state.detectedPositive = false;
     state.toneIgnored = false;
     state.renderBuf = null;
+    state.perspective = null;
+    state.perspEditing = false;
+    state.perspEditBackup = null;
+    state.plainData = null;
+    state.plainW = 0;
+    state.plainH = 0;
     if (el.cropBar) el.cropBar.hidden = true;
     if (el.cropOverlay) el.cropOverlay.hidden = true;
+    if (el.perspOverlay) el.perspOverlay.hidden = true;
     if (el.toneHint) el.toneHint.hidden = true;
     state.srcName = "";
     state.srcExt = "";
@@ -1408,6 +2110,7 @@
     if (el.exportFormat) el.exportFormat.disabled = true;
     updateBaseUI();
     updateBaseMessage("载入图片后自动识别画面边缘的未曝光片基。");
+    updatePerspectiveUI();
     renderQueue();
     setStatus("等待载入图片");
   }
@@ -1421,6 +2124,22 @@
         if (bitmap.close) bitmap.close();
         return;
       }
+      setupEditorFromBitmap(bitmap, item);
+    }).catch(function (err) {
+      console.error(err);
+      setStatus("图片解码失败：" + (err && err.message ? err.message : "不支持的格式"));
+    });
+  }
+
+  // 从已解码的 bitmap 重建编辑器（首次载入 / 透视开关切换共用）
+  function setupEditorFromBitmap(bitmap, item) {
+    {
+      // 切图时退出手动矫正编辑态（锚点叠加层不再适用新图）
+      if (state.perspEditing) {
+        state.perspEditing = false;
+        state.perspEditBackup = null;
+        if (el.perspOverlay) el.perspOverlay.hidden = true;
+      }
       state.bitmap = bitmap;
       state.fullW = bitmap.width;
       state.fullH = bitmap.height;
@@ -1432,11 +2151,42 @@
       var ctx = cnv.getContext("2d");
       ctx.imageSmoothingQuality = "high";
       ctx.drawImage(bitmap, 0, 0, w, h);
-      state.previewData = ctx.getImageData(0, 0, w, h);
-      state.previewW = w;
-      state.previewH = h;
-      el.canvas.width = w;
-      el.canvas.height = h;
+      var plain = ctx.getImageData(0, 0, w, h);
+      // 未矫正原图缓存：手动矫正编辑态显示用
+      state.plainData = plain;
+      state.plainW = w;
+      state.plainH = h;
+      // 透视：off 表示用户明确关闭；quad 已有则沿用，否则在未矫正图上自动检测
+      // 默认不自动矫正（on=false），检测值仅作为「手动调整」的初始建议
+      if (!item.perspective || (!item.perspective.quad && !item.perspective.off)) {
+        var det = detectPerspectiveQuad(plain.data, w, h);
+        item.perspective = det ? {
+          quad: det.quad, on: false, off: false,
+          angle: det.angleDeg, keystone: det.keystone, trapezoid: det.trapezoid,
+          confidence: det.confidence, straight: !det.significant, stable: det.edgeStable, edgeRms: det.edgeRms, topRms: det.topRms, botRms: det.botRms, leftRms: det.leftRms, rightRms: det.rightRms, rmsLimit: det.rmsLimit,
+          mode: det.mode, edgeData: det.edgeData, ampPx: det.ampPx
+        } : (item.perspective && item.perspective.off ? item.perspective : null);
+      }
+      var persp = item.perspective;
+      if (persp && persp.quad && persp.on) {
+        var warpedCnv = warpPerspectiveCanvas(cnv, persp);
+        if (warpedCnv) {
+          state.previewData = warpedCnv.getContext("2d").getImageData(0, 0, warpedCnv.width, warpedCnv.height);
+          state.previewW = warpedCnv.width;
+          state.previewH = warpedCnv.height;
+        } else {
+          state.previewData = plain;
+          state.previewW = w;
+          state.previewH = h;
+        }
+      } else {
+        state.previewData = plain;
+        state.previewW = w;
+        state.previewH = h;
+      }
+      state.perspective = persp;
+      el.canvas.width = state.previewW;
+      el.canvas.height = state.previewH;
       state.srcName = item.name;
       state.srcExt = item.ext;
       el.dropZone.hidden = true;
@@ -1503,11 +2253,9 @@
       el.compareOverlay.hidden = !state.splitOn;
       if (state.splitOn) rebuildCompareBefore();
       renderQueue();
+      updatePerspectiveUI();
       setStatus("");
-    }).catch(function (err) {
-      console.error(err);
-      setStatus("图片解码失败：" + (err && err.message ? err.message : "不支持的格式"));
-    });
+    }
   }
 
   // 渲染队列条（缩略图卡片 + 状态角标 + 删除 + 添加）
@@ -2055,11 +2803,19 @@
         var cnv = document.createElement("canvas");
         cnv.width = w; cnv.height = h;
         var ctx = cnv.getContext("2d");
+        ctx.imageSmoothingQuality = "high";
         ctx.drawImage(state.bitmap, 0, 0, w, h);
-        var src = ctx.getImageData(0, 0, w, h);
-        var out = ctx.createImageData(w, h);
+        // 透视拉正（与预览共用同一 quad，裁剪在矫正之后进行）
+        var persp = state.perspective;
+        if (persp && persp.quad && persp.on) {
+          var warped = warpPerspectiveCanvas(cnv, persp);
+          if (warped) { cnv = warped; w = warped.width; h = warped.height; }
+        }
+        var ectx = cnv.getContext("2d");
+        var src = ectx.getImageData(0, 0, w, h);
+        var out = ectx.createImageData(w, h);
         render(src.data, out.data, state.base, state.adj, state.analysis, buildCurveLuts(state.curve));
-        ctx.putImageData(out, 0, 0);
+        ectx.putImageData(out, 0, 0);
 
         var outCanvas = cnv;
         var rect = cropPxOf(w, h);
@@ -2176,12 +2932,20 @@
         var cnv = document.createElement("canvas");
         cnv.width = w; cnv.height = h;
         var ctx = cnv.getContext("2d");
+        ctx.imageSmoothingQuality = "high";
         ctx.drawImage(state.bitmap, 0, 0, w, h);
-        var src = ctx.getImageData(0, 0, w, h);
+        // 透视拉正（与预览/导出共用同一 quad）
+        var persp = state.perspective;
+        if (persp && persp.quad && persp.on) {
+          var warped = warpPerspectiveCanvas(cnv, persp);
+          if (warped) { cnv = warped; w = warped.width; h = warped.height; }
+        }
+        var lctx = cnv.getContext("2d");
+        var src = lctx.getImageData(0, 0, w, h);
         var analysis = state.positive ? analyzePositive() : analyze(src.data, state.base);
-        var out = ctx.createImageData(w, h);
+        var out = lctx.createImageData(w, h);
         render(src.data, out.data, state.base, state.adj, analysis, buildCurveLuts(state.curve));
-        ctx.putImageData(out, 0, 0);
+        lctx.putImageData(out, 0, 0);
         var shown = cnv;
         var rect = cropRectPx(state.crop, w, h);
         if (rect) {
@@ -2218,6 +2982,7 @@
   // ---- 窗口缩放时重新适配画布显示尺寸 ----
   var canvasResizeTimer = null;
   window.addEventListener("resize", function () {
+    if (state.perspEditing) updatePerspOverlay();
     if (!state.previewData) return;
     clearTimeout(canvasResizeTimer);
     canvasResizeTimer = setTimeout(function () {
@@ -2311,6 +3076,7 @@
     el.compareDivider.addEventListener(ev, function () { splitDrag = false; });
   });
   window.addEventListener("resize", function () {
+    if (state.perspEditing) updatePerspOverlay();
     syncCompareBox();
     syncCropBox();
     if (state.curveHist) drawHistogram(state.curveHist);
@@ -2522,11 +3288,19 @@
       var cnv = document.createElement("canvas");
       cnv.width = w; cnv.height = h;
       var ctx = cnv.getContext("2d");
+      ctx.imageSmoothingQuality = "high";
       ctx.drawImage(bmp, 0, 0, w, h);
-      var src = ctx.getImageData(0, 0, w, h);
-      var out = ctx.createImageData(w, h);
+      // 透视拉正（与预览共用同一 quad，裁剪在矫正之后进行）
+      var persp = item.perspective;
+      if (persp && persp.quad && persp.on) {
+        var warped = warpPerspectiveCanvas(cnv, persp);
+        if (warped) { cnv = warped; w = warped.width; h = warped.height; }
+      }
+      var ectx = cnv.getContext("2d");
+      var src = ectx.getImageData(0, 0, w, h);
+      var out = ectx.createImageData(w, h);
       render(src.data, out.data, base, adj, analysis, buildCurveLuts(item.curve));
-      ctx.putImageData(out, 0, 0);
+      ectx.putImageData(out, 0, 0);
       if (bmp.close) bmp.close();
       var outCanvas = cnv;
       var rect = cropRectPx(item.crop, w, h);
