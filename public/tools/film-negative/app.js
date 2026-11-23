@@ -136,25 +136,39 @@
     return { positive: true, levels: [id, id, id], gains: [1, 1, 1] };
   }
 
-  // 正负片判断：负片片基呈橙褐色、画面整体偏暗；已反相的正片通常有中性高光或白边
-  function detectPositive(data, w, h) {
+  // 正负片判断：负片片基呈橙褐色；已反相的正片通常有中性高光。
+  // 负片扫描的齿孔/亮背景本身就是中性亮白，不能凭画面外圈亮白判成正片，
+  // 因此：① 片基为暖橙色时直接否决；② 中性高光只在画面内部（排除外圈 12%）统计；
+  // ③ 外圈亮白仅作辅助加分，不足以单独触发。
+  function detectPositive(data, w, h, base) {
+    if (base && base.length >= 3) {
+      var br = base[0], bg = base[1], bb = base[2];
+      if (br - bb >= 25 && br + 6 >= bg) {
+        return { positive: false, score: 0, ratio: 0, edgeLum: 0, edgeSat: 0, vetoed: "warm-base" };
+      }
+    }
     var neutralBright = 0;
     var total = 0;
-    var step = Math.max(1, Math.floor((w * h) / 120000));
-    for (var p = 0; p < w * h; p += step) {
-      var o = p * 4;
-      if (data[o + 3] === 0) continue;
-      total += 1;
-      var mx = Math.max(data[o], data[o + 1], data[o + 2]);
-      var mn = Math.min(data[o], data[o + 1], data[o + 2]);
-      if (mx > 232 && mx - mn < 18) neutralBright += 1;
+    var insetX = Math.max(2, Math.round(w * 0.12));
+    var insetY = Math.max(2, Math.round(h * 0.12));
+    var x0 = insetX, x1 = w - insetX, y0 = insetY, y1 = h - insetY;
+    if (x1 - x0 < 8 || y1 - y0 < 8) { x0 = 0; x1 = w; y0 = 0; y1 = h; }
+    for (var y = y0; y < y1; y += 2) {
+      for (var x = x0; x < x1; x += 2) {
+        var o = (y * w + x) * 4;
+        if (data[o + 3] === 0) continue;
+        total += 1;
+        var mx = Math.max(data[o], data[o + 1], data[o + 2]);
+        var mn = Math.min(data[o], data[o + 1], data[o + 2]);
+        if (mx > 232 && mx - mn < 18) neutralBright += 1;
+      }
     }
     var edge = detectBaseFromEdges(data, w, h);
     var edgeLum = edge ? lum8(edge.rgb[0], edge.rgb[1], edge.rgb[2]) : 0;
     var edgeSat = edge ? Math.max(edge.rgb[0], edge.rgb[1], edge.rgb[2]) - Math.min(edge.rgb[0], edge.rgb[1], edge.rgb[2]) : 0;
     var ratio = total ? neutralBright / total : 0;
     var score = 0;
-    if (edgeLum > 170 && edgeSat < 34) score += 2;
+    if (edgeLum > 170 && edgeSat < 34) score += 1;
     if (ratio > 0.004) score += 2;
     if (ratio > 0.02) score += 1;
     return { positive: score >= 2, score: score, ratio: ratio, edgeLum: edgeLum, edgeSat: edgeSat };
@@ -1470,7 +1484,6 @@
     queueBar: document.getElementById("queue-bar"),
     queueCount: document.getElementById("queue-count"),
     btnCompareSplit: document.getElementById("btn-compare-split"),
-    btnExportZip: document.getElementById("btn-export-zip"),
     btnBatch: document.getElementById("btn-batch"),
     btnApplyAdjAll: document.getElementById("btn-apply-adj-all"),
     btnApplyBaseAll: document.getElementById("btn-apply-base-all"),
@@ -1500,8 +1513,6 @@
     toneText: document.getElementById("tone-text"),
     btnToneToggle: document.getElementById("btn-tone-toggle"),
     btnToneIgnore: document.getElementById("btn-tone-ignore"),
-    btnExportDir: document.getElementById("btn-export-dir"),
-    zipSplit: document.getElementById("zip-split"),
     btnZoom: document.getElementById("btn-zoom"),
     lightbox: document.getElementById("lightbox"),
     lightboxTitle: document.getElementById("lightbox-title"),
@@ -1526,7 +1537,6 @@
     btnApplyBaseUnproc: document.getElementById("btn-apply-base-unproc"),
     btnImportParamsQueue: document.getElementById("btn-import-params-queue"),
     queueEdited: document.getElementById("queue-edited"),
-    zipSplitRow: document.getElementById("zip-split-row"),
     miniDrop: document.getElementById("mini-drop"),
   };
 
@@ -1742,10 +1752,10 @@
     var r = state.base[0], g = state.base[1], b = state.base[2];
     el.baseSwatch.style.background = "rgb(" + r + ", " + g + ", " + b + ")";
     el.baseRgb.textContent = "RGB " + r + ", " + g + ", " + b;
-    el.baseSource.textContent = state.positive ? "正片直通" :
-      state.baseSource === "manual" ? "手动" :
-      state.baseSource === "auto" ? "自动" :
-      state.baseSource === "sync" ? "同步" : "默认值";
+    var baseSrcLabel = {
+      manual: "手动", sync: "同步", auto: "自动", gaps: "自动 · 间隔带", fallback: "默认值"
+    };
+    el.baseSource.textContent = state.positive ? "正片直通" : (baseSrcLabel[state.baseSource] || "自动");
     if (el.baseStats) {
       var showStats = !state.positive && !!state.previewData;
       el.baseStats.hidden = !showStats;
@@ -2179,7 +2189,7 @@
     [el.btnCompare, el.btnCompareSplit, el.btnZoom, el.btnReset, el.btnExport, el.btnAutoBase,
      el.btnManualBase, el.btnExportParams, el.btnImportParams, el.btnResetAdj, el.btnCurveReset, el.btnApplyAdjAll,
      el.btnApplyAdjUnproc, el.btnApplyBaseUnproc, el.btnImportParamsQueue, el.btnApplyBaseAll,
-     el.btnEditComp, el.btnResetAll, el.btnExportZip, el.btnBatch, el.btnCrop, el.btnExportDir].forEach(function (b) {
+     el.btnEditComp, el.btnResetAll, el.btnBatch, el.btnCrop].forEach(function (b) {
       if (b) b.disabled = true;
     });
     if (el.exportFormat) el.exportFormat.disabled = true;
@@ -2270,7 +2280,6 @@
        el.btnManualBase, el.btnExportParams, el.btnImportParams, el.btnResetAdj, el.btnCurveReset, el.btnCrop].forEach(function (b) {
         if (b) b.disabled = false;
       });
-      if (el.btnExportDir) el.btnExportDir.disabled = !window.showDirectoryPicker;
       if (el.exportFormat) el.exportFormat.disabled = false;
       if (el.exportFormat) {
         var origOpt = el.exportFormat.querySelector('option[value="original"]');
@@ -2313,7 +2322,7 @@
       }
       state.positive = !!item.positive;
       state.toneIgnored = false;
-      state.detectedPositive = !state.positive && detectPositive(state.previewData.data, w, h).positive;
+      state.detectedPositive = !state.positive && detectPositive(state.previewData.data, w, h, state.base).positive;
       state.analysis = state.positive ? analyzePositive() : analyze(state.previewData.data, state.base);
       item.opened = true;
       updateBaseUI();
@@ -2412,7 +2421,6 @@
     state.queue.forEach(function (q) { if (q.edited) editedCount += 1; });
     if (el.queueEdited) el.queueEdited.textContent = String(editedCount);
     var multi = state.queue.length >= 2;
-    if (el.btnExportZip) el.btnExportZip.disabled = !multi;
     if (el.btnBatch) el.btnBatch.disabled = !multi;
     if (el.btnApplyAdjAll) el.btnApplyAdjAll.disabled = !multi || !state.previewData;
     if (el.btnApplyAdjUnproc) el.btnApplyAdjUnproc.disabled = !multi || !state.previewData;
@@ -2420,7 +2428,6 @@
     if (el.btnApplyBaseUnproc) el.btnApplyBaseUnproc.disabled = !multi || !state.previewData;
     if (el.btnImportParamsQueue) el.btnImportParamsQueue.disabled = !state.previewData;
     if (el.btnResetAll) el.btnResetAll.disabled = state.queue.length < 1 || !state.previewData;
-    if (el.btnExportDir) el.btnExportDir.disabled = !state.previewData || !window.showDirectoryPicker;
     if (el.btnCrop) el.btnCrop.disabled = !state.previewData;
     if (state.cropEditing && !state.previewData) exitCropMode(false);
   }
@@ -3141,32 +3148,6 @@
     });
   }
 
-  // ---- 输出方式（文件夹 / 分卷 ZIP / 单一 ZIP） ----
-  function outputMode() {
-    var r = document.querySelector('input[name="output-mode"]:checked');
-    return r ? r.value : "folder";
-  }
-  function syncOutputModeUI(silent) {
-    var mode = outputMode();
-    if (mode === "folder" && !window.showDirectoryPicker) {
-      var splitRadio = document.querySelector('input[name="output-mode"][value="split"]');
-      if (splitRadio) {
-        splitRadio.checked = true;
-        mode = "split";
-        if (!silent) setStatus("当前浏览器不支持文件夹直写，已切换为自动分卷 ZIP。");
-      }
-    }
-    if (el.btnExportDir) el.btnExportDir.hidden = mode !== "folder";
-    if (el.btnExportZip) {
-      el.btnExportZip.hidden = mode === "folder";
-      el.btnExportZip.textContent = mode === "single" ? "导出单一 ZIP" : "导出全部 ZIP";
-    }
-    if (el.zipSplitRow) el.zipSplitRow.hidden = mode !== "split";
-  }
-  document.querySelectorAll('input[name="output-mode"]').forEach(function (r) {
-    r.addEventListener("change", function () { syncOutputModeUI(false); });
-  });
-  syncOutputModeUI(true);
 
   var splitDrag = false;
   function updateSplitFromEvent(e) {
@@ -3433,7 +3414,7 @@
     });
   }
 
-  // ---- 批量导出：内存预检 / 分卷 ZIP / 文件夹直写 ----
+  // ---- 批量导出：内存预检 / 单一 ZIP / 文件夹直写 ----
   function delay(ms) {
     return new Promise(function (resolve) { setTimeout(resolve, ms); });
   }
@@ -3472,13 +3453,13 @@
     var msg = "将按「" + batchFormatLabel(fmt) + "」逐张全分辨率处理 " + state.queue.length + " 张。\n" +
       "预计峰值内存约 " + (peak / 1048576).toFixed(0) + " MB（设备内存约 " + dev + " GB）。";
     if (risk) {
-      msg += "\n\n检测到高内存风险，建议改用「导出到文件夹」或分卷 ZIP。仍要继续吗？";
+      msg += "\n\n检测到高内存风险，建议改用「批量保存到文件夹」。仍要继续吗？";
     }
     return window.confirm(msg);
   }
 
   function batchBusy(on) {
-    [el.btnExportZip, el.btnExport, el.btnExportDir, el.btnApplyAdjAll,
+    [el.btnExport, el.btnApplyAdjAll,
      el.btnApplyAdjUnproc, el.btnApplyBaseAll, el.btnApplyBaseUnproc,
      el.btnImportParamsQueue, el.btnResetAll].forEach(function (b) { if (b) b.disabled = on; });
     if (!on) renderQueue();
@@ -3588,17 +3569,8 @@
     next();
   }
 
-  // 顶栏「批量导出」按当前输出方式分流，和 auto-tone 的批量按钮保持一致
-  if (el.btnBatch) {
-    el.btnBatch.addEventListener("click", function () {
-      var modeEl = document.querySelector('input[name="output-mode"]:checked');
-      var mode = modeEl ? modeEl.value : "folder";
-      if (mode === "folder" && el.btnExportDir) el.btnExportDir.click();
-      else if (el.btnExportZip) el.btnExportZip.click();
-    });
-  }
-
-  el.btnExportZip.addEventListener("click", function () {
+  // 批量导出 ZIP（内部回退路径，仅当浏览器不支持文件夹直写时由「批量导出」调用）
+  function exportQueueToZip() {
     if (state.queue.length < 2) return;
     if (typeof JSZip === "undefined") {
       setStatus("打包组件未加载（JSZip 缺失），请刷新页面重试。");
@@ -3607,14 +3579,12 @@
     saveCurrentToQueue();
     var fmt = el.exportFormat ? el.exportFormat.value : "jpeg";
     if (!confirmBatch(fmt)) return;
-    var mode = outputMode();
-    var limitMB = mode === "single" ? 0 : (el.zipSplit ? Number(el.zipSplit.value) : 0);
-    if (mode === "split" && limitMB <= 0) limitMB = 500; // 自动分卷默认 500MB/卷
     batchBusy(true);
-    runZipExport(fmt, limitMB > 0 ? limitMB * 1048576 : 0);
-  });
+    runZipExport(fmt, 0); // 单一 ZIP，不分卷
+  }
 
-  el.btnExportDir.addEventListener("click", function () {
+  // 批量保存到文件夹（逐张写入，内存占用最低）
+  function exportQueueToDir() {
     if (!window.showDirectoryPicker) {
       setStatus("当前浏览器不支持文件夹直写，请改用 ZIP 导出。");
       return;
@@ -3637,7 +3607,15 @@
       console.error(err);
       setStatus("文件夹写入失败：" + (err && err.message ? err.message : "未知错误"));
     });
-  });
+  }
+
+  // 顶栏「批量导出」：优先保存到文件夹，浏览器不支持文件夹直写时回退 ZIP
+  if (el.btnBatch) {
+    el.btnBatch.addEventListener("click", function () {
+      if (window.showDirectoryPicker) exportQueueToDir();
+      else exportQueueToZip();
+    });
+  }
 
   // 画布区也支持拖放新图（队列已有图时 drop-zone 是隐藏的）
   ["dragover", "dragenter"].forEach(function (ev) {

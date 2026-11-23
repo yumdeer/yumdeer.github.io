@@ -12,7 +12,8 @@ import { chromium } from "playwright";
 // 3) 轴对齐图判定“基本平直”不自动启用；
 // 4) 无背景图不误报、不崩溃；
 // 5) 波浪边：局部抚直模式默认关闭，开启后画面中心锚定不动；
-// 6) 手动锚点矫正：进入编辑态 → 拖四角 → 完成 → 应用；取消可恢复。
+// 6) 手动锚点矫正：进入编辑态 → 拖四角 → 完成 → 应用；取消可恢复；
+// 7) 橙黄负片条带（带白色齿孔）：不得误判为正片。
 
 const ROOT = path.resolve(import.meta.dirname, "../../public");
 const FIXTURES = path.resolve(import.meta.dirname, "fixtures");
@@ -323,6 +324,30 @@ test("无背景图：不误报、界面不崩溃", async () => {
     assert.match(info, /未检测到清晰边缘/);
     const checked = await page.evaluate(() => document.getElementById("persp-enabled").disabled);
     assert.equal(checked, true, "无检测结果时开关应禁用");
+  } finally {
+    await page.close();
+  }
+});
+
+test("橙色负片条带（含白色齿孔）：不误判为正片", async () => {
+  const page = await openTool();
+  try {
+    await importImage(page, path.join(FIXTURES, "fn-strip-orange.png"));
+    const info = await page.evaluate(() => ({
+      hintHidden: document.getElementById("tone-hint").hidden,
+      hintText: document.getElementById("tone-text").textContent,
+      base: document.getElementById("base-rgb").textContent,
+      source: document.getElementById("base-source").textContent,
+      tag: document.getElementById("input-tag").textContent
+    }));
+    assert.equal(info.tag, "负片", "橙黄条带应判定为负片");
+    assert.equal(info.hintHidden, true, `负片不应显示正片提示，实际文案：${info.hintText}`);
+    assert.doesNotMatch(info.hintText, /正片/);
+    // 片基必须是暖橙（R 明显高于 B），这是否决正片判定的依据
+    const m = info.base.match(/RGB (\d+), (\d+), (\d+)/);
+    assert.ok(m, `片基应为 RGB 三元组，实际：${info.base}`);
+    assert.ok(Number(m[1]) - Number(m[3]) >= 25, `片基应为暖橙色，实际 ${info.base}`);
+    assert.equal(info.source, "自动 · 间隔带", "片基应来自画格间隔带而非回退默认值");
   } finally {
     await page.close();
   }
