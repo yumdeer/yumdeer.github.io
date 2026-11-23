@@ -165,6 +165,10 @@
   // B. 内容高光分位：适用于边缘被遮罩/裁剪掉的扫描（如黑边整卷扫描条），
   //    负片中场景阴影≈接近片基的最亮区域，取内容像素逐通道 99.5% 分位估计。
   function autoDetectBase(data, w, h) {
+    // 策略A0：多画幅条带优先——翻拍/整卷扫描的片基在画格间隔带里，
+    // 画面边缘只会采到亮背景或黑色夹具，必须先看内部间隔带
+    var gaps = detectBaseFromStripGaps(data, w, h);
+    if (gaps) return gaps;
     var edge = detectBaseFromEdges(data, w, h);
     var content = detectBaseFromContent(data, w, h);
     // 内容法明显亮于边缘法时，说明边缘采到的是遮罩黑边或画面内容，改用内容法
@@ -173,6 +177,77 @@
     }
     if (content) return content;
     return { rgb: DEFAULT_BASE.slice(), source: "fallback", confidence: 0, samples: 0, message: "边缘与内容样本均不足，使用默认片基，建议手动取样。" };
+  }
+
+  // 策略A0：多画幅条带（翻拍底片/整卷扫描）——片基在画格间隔带里。
+  // 间隔带是未曝光胶片：暖色序（橙罩 R≥G≥B）、较亮（负片中最亮的均匀区域）、
+  // 高度均匀（无画面纹理）。逐列（横条）/逐行（竖条）统计中央截面，
+  // 找出满足判据的连续条带，取其中位数为片基。单画幅或黑白片自动回退。
+  function detectBaseFromStripGaps(data, w, h) {
+    var horizontal = w >= h * 2.2;
+    var vertical = h >= w * 2.2;
+    if (!horizontal && !vertical) return null;
+    var n = horizontal ? w : h;      // 沿条带方向的位置数
+    var span = horizontal ? h : w;   // 条带横截面尺寸
+    var lo = Math.round(span * 0.22);
+    var hi = Math.round(span * 0.78);
+    if (hi - lo < 10 || n < 60) return null;
+    var step = Math.max(1, Math.floor((hi - lo) / 80));
+    var cols = [];
+    for (var i = 0; i < n; i++) {
+      var r = 0, g = 0, b = 0, cnt = 0;
+      var ls = [];
+      for (var j = lo; j < hi; j += step) {
+        var o = horizontal ? (j * w + i) * 4 : (i * w + j) * 4;
+        var rr = data[o], gg = data[o + 1], bb = data[o + 2];
+        r += rr; g += gg; b += bb; cnt++;
+        ls.push(lum8(rr, gg, bb));
+      }
+      if (cnt < 6) continue;
+      r /= cnt; g /= cnt; b /= cnt;
+      var lmean = 0, dev = 0;
+      for (var k = 0; k < ls.length; k++) lmean += ls[k];
+      lmean /= ls.length;
+      for (var k2 = 0; k2 < ls.length; k2++) dev += Math.abs(ls[k2] - lmean);
+      dev /= ls.length;
+      cols.push({ i: i, r: r, g: g, b: b, l: lmean, dev: dev });
+    }
+    if (cols.length < n * 0.5) return null;
+    // 间隔带判据：暖色序 + 较亮 + 均匀（无画面纹理）
+    var cand = cols.filter(function (c) {
+      return c.l >= 80 && c.dev <= 8 && c.r >= c.g - 3 && c.g >= c.b - 3 && c.r - c.b >= 12;
+    });
+    if (!cand.length) return null;
+    // 只保留与最亮候选同一亮度级的条带：片基是负片中最亮的均匀区域，
+    // 暗红内容（如暗部场景）虽满足暖色序但明显更暗，需剔除
+    var maxL = 0;
+    cand.forEach(function (c) { if (c.l > maxL) maxL = c.l; });
+    var kept = cand.filter(function (c) { return c.l >= maxL * 0.86; });
+    // 连续段宽度校验：排除零星误检列
+    var runs = [];
+    var run = [];
+    kept.forEach(function (c) {
+      if (run.length && c.i - run[run.length - 1].i <= 2) run.push(c);
+      else { if (run.length) runs.push(run); run = [c]; }
+    });
+    if (run.length) runs.push(run);
+    var minRun = Math.max(3, Math.round(n * 0.004));
+    runs = runs.filter(function (rr) { return rr.length >= minRun; });
+    if (!runs.length) return null;
+    var all = [];
+    runs.forEach(function (rr) { rr.forEach(function (c) { all.push(c); }); });
+    if (all.length < n * 0.004 || all.length > n * 0.45) return null;
+    function medOf(key) {
+      var arr = all.map(function (c) { return c[key]; }).sort(function (a, b) { return a - b; });
+      return arr[Math.floor(arr.length / 2)];
+    }
+    return {
+      rgb: [Math.round(medOf("r")), Math.round(medOf("g")), Math.round(medOf("b"))],
+      source: "gaps",
+      confidence: clamp(all.length / (n * 0.03), 0.55, 1),
+      samples: all.length,
+      message: "从画格间隔带检测片基（" + runs.length + " 段 / " + all.length + " 列采样）。"
+    };
   }
 
   // 策略A：沿画面边缘采样，过滤高细节与极端亮度，按"平滑度"评分后取截尾均值
@@ -2779,6 +2854,43 @@
     return new Blob(parts, { type: "image/tiff" });
   }
 
+  // 导出目录：记住本次会话的选择；权限仍在则复用，否则重新弹出选择器。
+  // 取消选择或不支持文件夹直写时回退浏览器下载，保证产物不丢。
+  var exportDirHandle = null;
+  function pickExportDir() {
+    if (!window.showDirectoryPicker) return Promise.resolve(null);
+    var pick = function () {
+      return window.showDirectoryPicker({ mode: "readwrite", id: "fn-export" })
+        .then(function (h) { exportDirHandle = h; return h; });
+    };
+    if (exportDirHandle && exportDirHandle.queryPermission) {
+      return exportDirHandle.queryPermission({ mode: "readwrite" }).then(function (p) {
+        if (p === "granted") return exportDirHandle;
+        return pick();
+      });
+    }
+    return pick();
+  }
+
+  // 单张导出统一入口：优先写入用户所选目录，失败/取消回退下载
+  function deliverExport(blob, ext, label, note, w, h) {
+    return pickExportDir().then(function (dir) {
+      if (!dir) { saveBlob(blob, ext, label, note, w, h); return; }
+      var name = baseName(state.srcName || "negative") + "-converted." + ext;
+      return dir.getFileHandle(name, { create: true })
+        .then(function (fh) { return fh.createWritable(); })
+        .then(function (wr) { return wr.write(blob).then(function () { return wr.close(); }); })
+        .then(function () {
+          setStatus("已写入目录：" + name + "（" + label + " " + w + " × " + h + "）" + (note || ""));
+          el.btnExport.disabled = false;
+        });
+    }).catch(function (err) {
+      if (err && err.name === "AbortError") { saveBlob(blob, ext, label, note, w, h); return; }
+      console.error(err);
+      saveBlob(blob, ext, label, note, w, h);
+    });
+  }
+
   function saveBlob(blob, ext, label, note, w, h) {
     var url = URL.createObjectURL(blob);
     var a = document.createElement("a");
@@ -2829,12 +2941,12 @@
 
         if (resolved.kind === "tiff") {
           var od = outCanvas.getContext("2d").getImageData(0, 0, ow, oh);
-          saveBlob(encodeTiffRgb(od.data, ow, oh), "tiff", "TIFF", resolved.note, ow, oh);
+          deliverExport(new Blob([encodeTiffRgb(od.data, ow, oh)], { type: "image/tiff" }), "tiff", "TIFF", resolved.note, ow, oh);
           return;
         }
         var spec = EXPORT_SPECS[resolved.kind] || EXPORT_SPECS.png;
         canvasToBlob(outCanvas, spec.mime, spec.quality).then(function (blob) {
-          saveBlob(blob, spec.ext, spec.label, resolved.note, ow, oh);
+          return deliverExport(blob, spec.ext, spec.label, resolved.note, ow, oh);
         }).catch(function (err) {
           console.error(err);
           setStatus("导出失败：" + err.message);
