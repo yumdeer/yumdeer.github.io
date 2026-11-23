@@ -158,3 +158,33 @@ test("画幅与画面比例不符时不强行切分", async () => {
     await page.close();
   }
 });
+
+test("分割张数：暗部底片强制指定 6 张后切出 6 个等宽画格", async () => {
+  const page = await openTool();
+  try {
+    await importFixture(page, "y2.jpg");
+    const frames = await detect(page, () => page.selectOption("#frameCount", "6"));
+    assertUniformFrames(frames, 6);
+  } finally {
+    await page.close();
+  }
+});
+
+test("全选后修改画幅：所有底片一起重新匹配", async () => {
+  const page = await openTool();
+  try {
+    await detect(page, () => page.setInputFiles("#fileInput", [
+      path.join(FIXTURES, "p2.jpg"),
+      path.join(FIXTURES, "p4.jpg")
+    ]));
+    await page.click("#jobSelectAll");
+    assert.equal(await page.getAttribute("#jobSelectAll", "aria-pressed"), "true", "全选后按钮应处于选中态");
+    await page.selectOption("#filmFormat", "135");
+    await page.waitForFunction(() => {
+      const cards = Array.from(document.querySelectorAll(".job-card-status"));
+      return cards.length === 2 && cards.every((node) => node.textContent.includes("6 个画格"));
+    }, null, { timeout: 120000 });
+  } finally {
+    await page.close();
+  }
+});

@@ -23,7 +23,9 @@
     addFrameButton: $("#addFrameButton"),
     sourceMode: $("#sourceMode"),
     filmFormat: $("#filmFormat"),
+    frameCount: $("#frameCount"),
     cropScope: $("#cropScope"),
+    jobSelectAll: $("#jobSelectAll"),
     filmBaseControl: $("#filmBaseControl"),
     filmBaseSwatch: $("#filmBaseSwatch"),
     filmBaseStatus: $("#filmBaseStatus"),
@@ -70,6 +72,7 @@
 
   const state = {
     jobs: [],
+    selectedJobs: new Set(),
     activeJobId: null,
     jobSequence: 0,
     file: null,
@@ -143,6 +146,8 @@
     els.detectButton.addEventListener("click", detectFrames);
     els.sourceMode.addEventListener("change", handleSourceModeChange);
     els.filmFormat.addEventListener("change", handleFilmFormatChange);
+    els.frameCount.addEventListener("change", handleFrameCountChange);
+    els.jobSelectAll?.addEventListener("click", handleJobSelectAll);
     els.cropScope.addEventListener("change", handleCropScopeChange);
     els.filmBaseSampleButton.addEventListener("click", toggleFilmBaseSampling);
     els.filmBaseClearButton.addEventListener("click", clearFilmBaseSamples);
@@ -227,7 +232,8 @@
         inset: Number(els.edgeInset.value),
         orientation: "auto",
         sourceMode: "auto",
-        filmFormat: "auto"
+        filmFormat: "auto",
+        frameCount: 0
       },
       baseSamples: [],
       filmBase: null,
@@ -254,6 +260,7 @@
       orientation: "auto",
       sourceMode: els.sourceMode.value,
       filmFormat: els.filmFormat.value,
+      frameCount: Number(els.frameCount.value) || 0,
       cropScope: els.cropScope.value
     };
   }
@@ -264,6 +271,7 @@
     els.edgeInset.value = String(job.options.inset);
     els.sourceMode.value = job.options.sourceMode || "auto";
     els.filmFormat.value = job.options.filmFormat || "auto";
+    els.frameCount.value = String(job.options.frameCount || 0);
     els.cropScope.value = job.options.cropScope || "frame";
     updateRangeLabels();
     updateFilmBaseUi(job);
@@ -1768,7 +1776,9 @@
   // 画格的中位宽高为准，画幅比例只用于校验扫描件比例与推算格数。
   function refineFramesWithExplicitFormat(result, analysis, options) {
     const format = FILM_FORMATS[options.filmFormat];
-    if (!format || !result || !result.frames.length) return result;
+    const forcedCount = Math.round(Number(options.frameCount) || 0);
+    const forced = forcedCount >= 2 && forcedCount <= 12;
+    if ((!format && !forced) || !result || !result.frames.length) return result;
     const frames = result.frames;
     const union = frames.reduce((box, frame) => ({
       x0: Math.min(box.x0, frame.x),
@@ -1795,14 +1805,21 @@
     if (!median || !medianCross) return result;
 
     // 扫描件的画格比例应接近所选画幅，偏差过大说明画幅与画面不符，不做强约束。
-    if (Math.abs(median / medianCross / format.aspect - 1) > 0.2) return result;
-    // 画格之间必然留有分隔线，取整后若总宽明显超出胶片跨度（放不下）就退回少一格，
-    // 避免 1500 / 230 ≈ 6.5 被取成 7 格而把完整画面切碎。
-    let count = Math.round(span / median);
-    if (count * median > span * 1.05) count -= 1;
-    if (count < 2 || count > 12 || span < median) return result;
+    // 用户手动指定张数时以用户为准，跳过自动校验。
+    if (format && !forced && Math.abs(median / medianCross / format.aspect - 1) > 0.2) return result;
+    let count;
+    if (forced) {
+      count = forcedCount;
+    } else {
+      // 画格之间必然留有分隔线，取整后若总宽明显超出胶片跨度（放不下）就退回少一格，
+      // 避免 1500 / 230 ≈ 6.5 被取成 7 格而把完整画面切碎。
+      count = Math.round(span / median);
+      if (count * median > span * 1.05) count -= 1;
+      if (count < 2 || count > 12 || span < median) return result;
+      if (Math.abs(span / count / median - 1) > 0.15) return result;
+    }
     const step = span / count;
-    if (Math.abs(step / median - 1) > 0.15) return result;
+    if (step < 16) return result;
 
     const deviated = frames.length !== count || frames.some((frame) => (
       Math.abs((horizontal ? frame.w : frame.h) / median - 1) > 0.08
@@ -1813,7 +1830,7 @@
     const crossStart = middle(frames.map((frame) => (horizontal ? frame.y : frame.x)));
     const inset = Math.round(options.inset / Math.max(state.scaleX, 0.001));
     // 所有画格统一取同一个尺寸，避免首尾格被单独压窄；格宽不超过格距，保证不重叠。
-    const unit = Math.min(median, step);
+    const unit = Math.min(step, median >= step * 0.75 ? median : step * 0.96);
     const rebuilt = [];
     for (let index = 0; index < count; index += 1) {
       const start = alongStart + step * index + (step - unit) / 2;
@@ -1891,7 +1908,8 @@
       if (!along || !cross) return -Infinity;
       const length = horizontal ? analysis.width : analysis.height;
       const coverage = Math.min(1, (along * frames.length) / Math.max(1, length));
-      return coverage - Math.abs(Math.log(along / cross / format.aspect)) * 0.5;
+      const aspectPenalty = format ? Math.abs(Math.log(along / cross / format.aspect)) * 0.5 : 0;
+      return coverage - aspectPenalty;
     };
     return evaluate(alternate) > evaluate(primary) + 0.02 ? alternate : primary;
   }
@@ -1900,7 +1918,8 @@
     const cropped = cropWhiteMargins(analysis);
     let result = detectOnAnalysis(cropped.analysis, options);
     const format = FILM_FORMATS[options.filmFormat];
-    if (format) {
+    const forcedCount = Math.round(Number(options.frameCount) || 0);
+    if (format || (forcedCount >= 2 && forcedCount <= 12)) {
       const boosted = boostAnalysisForDetection(cropped.analysis);
       if (boosted) {
         result = preferDetection(result, detectOnAnalysis(boosted, options), format, cropped.analysis);
@@ -3031,10 +3050,17 @@
     );
     els.jobQueueSummary.textContent = `${state.jobs.length} 张底片 · ${selectedTotal} 个画格待导出`;
     els.jobList.replaceChildren();
+    // 已移除底片的勾选状态需要同步清理，避免残留 id 影响批量应用。
+    const liveIds = new Set(state.jobs.map((job) => job.id));
+    Array.from(state.selectedJobs).forEach((id) => {
+      if (!liveIds.has(id)) state.selectedJobs.delete(id);
+    });
+    const showSelect = state.jobs.length > 1;
 
     state.jobs.forEach((job, index) => {
       const card = document.createElement("article");
-      card.className = `job-card is-${job.status}${job.id === state.activeJobId ? " is-active" : ""}`;
+      const isTarget = state.selectedJobs.has(job.id);
+      card.className = `job-card is-${job.status}${job.id === state.activeJobId ? " is-active" : ""}${isTarget ? " is-target" : ""}`;
       card.tabIndex = state.busy ? -1 : 0;
       card.setAttribute("role", "button");
       card.setAttribute("aria-current", job.id === state.activeJobId ? "true" : "false");
@@ -3048,11 +3074,15 @@
           : job.status === "pending"
             ? "等待识别"
             : `${job.frames.length} 个画格 · ${selected} 个待导出`;
-      card.innerHTML = `<span class="job-card-name" title="${escapeHtml(job.file.name)}">${String(index + 1).padStart(2, "0")} · ${escapeHtml(job.file.name)}</span><small class="job-card-meta">${job.format.label} · ${formatBytes(job.file.size)}</small><small class="job-card-status">${statusText}</small><button class="job-remove" type="button" aria-label="移除 ${escapeHtml(job.file.name)}">×</button>`;
+      const checkbox = showSelect
+        ? `<input class="job-select" type="checkbox"${isTarget ? " checked" : ""} aria-label="选中 ${escapeHtml(job.file.name)}">`
+        : "";
+      card.innerHTML = `${checkbox}<span class="job-card-name" title="${escapeHtml(job.file.name)}">${String(index + 1).padStart(2, "0")} · ${escapeHtml(job.file.name)}</span><small class="job-card-meta">${job.format.label} · ${formatBytes(job.file.size)}</small><small class="job-card-status">${statusText}</small><button class="job-remove" type="button" aria-label="移除 ${escapeHtml(job.file.name)}">×</button>`;
       card.addEventListener("click", (event) => {
-        if (!event.target.closest(".job-remove")) void activateJob(job.id);
+        if (!event.target.closest(".job-remove") && !event.target.closest(".job-select")) void activateJob(job.id);
       });
       card.addEventListener("keydown", (event) => {
+        if (event.target.closest(".job-select")) return;
         if ((event.key === "Enter" || event.key === " ") && !state.busy) {
           event.preventDefault();
           void activateJob(job.id);
@@ -3062,8 +3092,17 @@
         event.stopPropagation();
         void removeJob(job.id);
       });
+      const selectBox = card.querySelector(".job-select");
+      selectBox?.addEventListener("click", (event) => {
+        event.stopPropagation();
+        if (selectBox.checked) state.selectedJobs.add(job.id);
+        else state.selectedJobs.delete(job.id);
+        card.classList.toggle("is-target", selectBox.checked);
+        updateJobSelectAll();
+      });
       els.jobList.append(card);
     });
+    updateJobSelectAll();
   }
 
   async function removeJob(jobId) {
@@ -3920,11 +3959,75 @@
     return { r: median(red), g: median(green), b: median(blue) };
   }
 
-  function handleFilmFormatChange() {
+  // 批量应用目标：当前底片 + 队列中勾选的底片。
+  function optionTargetJobs() {
+    const targets = [];
+    const seen = new Set();
+    const add = (job) => {
+      if (job && !seen.has(job.id)) {
+        seen.add(job.id);
+        targets.push(job);
+      }
+    };
+    add(getActiveJob());
+    state.jobs.forEach((job) => add(state.selectedJobs.has(job.id) ? job : null));
+    return targets;
+  }
+
+  function applyOptionToTargets(key, value, doneLabel, busyMessage) {
     const job = getActiveJob();
     if (!job || state.busy) return;
-    job.options.filmFormat = els.filmFormat.value;
-    void detectFrames();
+    const targets = optionTargetJobs();
+    targets.forEach((item) => { item.options[key] = value; });
+    if (targets.length <= 1) {
+      void detectFrames();
+      return;
+    }
+    void redetectAllJobs(targets, { message: busyMessage, doneLabel });
+  }
+
+  function handleFilmFormatChange() {
+    const label = els.filmFormat.selectedOptions?.[0]?.textContent || els.filmFormat.value;
+    applyOptionToTargets(
+      "filmFormat",
+      els.filmFormat.value,
+      label,
+      "正在按新的胶片画幅重新匹配选中底片…"
+    );
+  }
+
+  function handleFrameCountChange() {
+    const value = Number(els.frameCount.value) || 0;
+    const label = value >= 2
+      ? (els.frameCount.selectedOptions?.[0]?.textContent || `${value} 张`)
+      : "自动识别";
+    applyOptionToTargets(
+      "frameCount",
+      value,
+      label,
+      "正在按指定分割张数重新匹配选中底片…"
+    );
+  }
+
+  function handleJobSelectAll() {
+    if (state.busy || state.jobs.length <= 1) return;
+    if (state.jobs.every((job) => state.selectedJobs.has(job.id))) {
+      state.selectedJobs.clear();
+    } else {
+      state.jobs.forEach((job) => state.selectedJobs.add(job.id));
+    }
+    renderJobQueue();
+  }
+
+  function updateJobSelectAll() {
+    if (!els.jobSelectAll) return;
+    const total = state.jobs.length;
+    const count = state.jobs.filter((job) => state.selectedJobs.has(job.id)).length;
+    const all = total > 0 && count === total;
+    els.jobSelectAll.hidden = total <= 1;
+    els.jobSelectAll.disabled = total <= 1;
+    els.jobSelectAll.setAttribute("aria-pressed", all ? "true" : "false");
+    els.jobSelectAll.textContent = all ? "取消全选" : count > 0 ? `已选 ${count} 张` : "全选";
   }
 
   function handleCropScopeChange() {
@@ -3940,14 +4043,14 @@
     void redetectAllJobs();
   }
 
-  async function redetectAllJobs() {
+  async function redetectAllJobs(targets = null, { message = "正在按新的裁切范围重新匹配所有底片…", doneLabel = null } = {}) {
     const activeJobId = state.activeJobId;
-    const jobs = state.jobs.slice();
+    const jobs = (targets && targets.length ? targets : state.jobs).slice();
     const ordered = jobs
       .filter((job) => job.id !== activeJobId)
       .concat(jobs.filter((job) => job.id === activeJobId));
     const failed = [];
-    setBusy(true, "正在按新的裁切范围重新匹配所有底片…");
+    setBusy(true, message);
     await nextPaint();
     try {
       for (let index = 0; index < ordered.length; index += 1) {
@@ -3972,7 +4075,7 @@
       setBusy(false);
       renderJobQueue();
     }
-    const scopeLabel = els.cropScope.selectedOptions?.[0]?.textContent || els.cropScope.value;
+    const scopeLabel = doneLabel || els.cropScope.selectedOptions?.[0]?.textContent || els.cropScope.value;
     showToast(failed.length
       ? `已按「${scopeLabel}」重新匹配 ${ordered.length - failed.length} 张底片，${failed.length} 张失败`
       : `已按「${scopeLabel}」重新匹配 ${ordered.length} 张底片`);
@@ -4787,6 +4890,7 @@
     els.detectButton.disabled = busy;
     els.sourceMode.disabled = busy;
     els.filmFormat.disabled = busy;
+    els.frameCount.disabled = busy;
     els.cropScope.disabled = busy;
     els.filmBaseSampleButton.disabled = busy;
     els.filmBaseClearButton.disabled = busy;
