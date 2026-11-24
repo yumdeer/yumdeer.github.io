@@ -1442,6 +1442,7 @@
     positive: false,     // 按正片直通处理（不做反相）
     detectedPositive: false, // 自动判断疑似正片
     toneIgnored: false,  // 用户忽略了正片提示
+    positiveDiag: null,  // 正片判定的中间证据（score/ratio/edgeLum/edgeSat/vetoed）
     renderBuf: null,     // 预览渲染缓存（完整预览尺寸）
     curve: defaultCurve(),   // 曲线控制点 {rgb,r,g,b}
     curveChannel: "rgb",     // 当前编辑的曲线通道
@@ -2322,7 +2323,8 @@
       }
       state.positive = !!item.positive;
       state.toneIgnored = false;
-      state.detectedPositive = !state.positive && detectPositive(state.previewData.data, w, h, state.base).positive;
+      state.positiveDiag = state.positive ? null : detectPositive(state.previewData.data, w, h, state.base);
+      state.detectedPositive = !state.positive && !!state.positiveDiag.positive;
       state.analysis = state.positive ? analyzePositive() : analyze(state.previewData.data, state.base);
       item.opened = true;
       updateBaseUI();
@@ -2910,6 +2912,36 @@
     setStatus("已导出 " + label + "（" + w + " × " + h + "）" + (note || ""));
     el.btnExport.disabled = false;
   }
+
+  // 顶栏诊断：复制当前处理状态与关键中间量（片基来源/置信度、正片判定证据、透视检测值），
+  // 便于用户反馈问题时直接粘贴给开发者。
+  var diagBtn = document.getElementById("diagButton");
+  if (diagBtn) diagBtn.addEventListener("click", function () {
+    var scriptEl = document.querySelector('script[src*="app.js"]');
+    var diag = {
+      tool: "film-negative",
+      script: scriptEl ? scriptEl.src : "",
+      name: state.srcName,
+      full: { w: state.fullW, h: state.fullH },
+      preview: { w: state.previewW, h: state.previewH },
+      base: { rgb: state.base.slice(), source: state.baseSource, confidence: state.baseConfidence, samples: state.baseSamples },
+      positive: { positive: state.positive, detectedPositive: state.detectedPositive, toneIgnored: state.toneIgnored, evidence: state.positiveDiag },
+      analysis: state.analysis,
+      perspective: state.perspective,
+      crop: state.crop,
+      queue: { length: state.queue.length }
+    };
+    var text = JSON.stringify(diag, null, 2);
+    console.log("[film-negative-diag]", diag);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(
+        function () { setStatus("诊断信息已复制，可粘贴给开发者"); },
+        function () { setStatus("复制失败，诊断信息已输出到控制台"); }
+      );
+    } else {
+      setStatus("复制失败，诊断信息已输出到控制台");
+    }
+  });
 
   el.btnExport.addEventListener("click", function () {
     if (!state.bitmap) return;

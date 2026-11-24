@@ -86,17 +86,6 @@ body {
   flex: 1;
 }
 
-.origin-note {
-  font-size: 12px;
-  color: var(--ink-faint);
-  text-decoration: none;
-  transition: color 0.2s;
-}
-
-.origin-note:hover {
-  color: var(--accent);
-}
-
 .layout {
   display: grid;
   grid-template-columns: clamp(228px, 19vw, 284px) minmax(0, 1fr) clamp(228px, 19vw, 284px);

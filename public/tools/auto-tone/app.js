@@ -132,6 +132,10 @@
 
   /* ---------- 白平衡估计 ---------- */
 
+  /* 诊断中间量：记录强度混合前的原始增益与曝光增益的上下限来源 */
+  let wbDiag = null;
+  let expDiag = null;
+
   function grayWorldGains(data, w, h, step) {
     let sr = 0, sg = 0, sb = 0, n = 0;
     for (let y = 0; y < h; y += step) {
@@ -153,7 +157,7 @@
 
   function estimateWhiteBalance(a, st) {
     const s = st || state.settings;
-    if (!s.wbEnabled) return [1, 1, 1];
+    if (!s.wbEnabled) { wbDiag = { enabled: false }; return [1, 1, 1]; }
 
     const { data, w, h } = a;
     const step = sampleStep(w, h, 220000);
@@ -225,6 +229,7 @@
       }
     }
 
+    wbDiag = { enabled: true, method: s.wbMethod, rawGains: gains.slice() };
     const strength = s.wbStrength;
     return gains.map((g) => {
       const cg = clamp(g, 0.34, 3);
@@ -236,7 +241,7 @@
 
   function estimateExposure(a, gains, st) {
     const s = st || state.settings;
-    if (!s.expEnabled) return 1;
+    if (!s.expEnabled) { expDiag = { enabled: false }; return 1; }
     const { data, w, h } = a;
     const step = sampleStep(w, h, 220000);
     const hist = new Uint32Array(256);
@@ -257,6 +262,7 @@
     /* 高光保护：增益后 P99.9 亮度不得超过 0.98，防止大增益把大片高光推成死白 */
     const hiLin = SRGB_TO_LIN[percentileFromHist(hist, total, 99.9)];
     const capGain = hiLin > 1e-3 ? clamp(0.98 / hiLin, 0.25, 4) : 4;
+    expDiag = { enabled: true, medGain, capGain, highlightCapped: capGain < medGain };
     return Math.min(medGain, capGain);
   }
 
@@ -2005,6 +2011,48 @@
 
     $('btn-export').addEventListener('click', exportImage);
     $('btn-batch').addEventListener('click', exportBatch);
+
+    /* 顶栏诊断：复制自动分析的中间量（原始白平衡增益 / 曝光增益上下限 / 自动色阶），
+       便于用户反馈偏色、过曝问题时直接粘贴给开发者。 */
+    const diagBtn = $('diagButton');
+    if (diagBtn) diagBtn.addEventListener('click', async () => {
+      const s = state.settings;
+      const scriptEl = document.querySelector('script[src*="app.js"]');
+      const diag = {
+        tool: 'auto-tone',
+        script: scriptEl ? scriptEl.src : '',
+        name: state.name,
+        source: { w: state.sourceW, h: state.sourceH },
+        analysis: state.analysis ? { w: state.analysis.w, h: state.analysis.h } : null,
+        beforeMedian: state.beforeMedian,
+        settings: {
+          wbEnabled: s.wbEnabled, wbMethod: s.wbMethod, wbStrength: s.wbStrength,
+          expEnabled: s.expEnabled, target: s.target, autoLevels: s.autoLevels,
+          lowPct: s.lowPct, highPct: s.highPct, low: s.low, high: s.high,
+          ev: s.ev, gamma: s.gamma, saturation: s.saturation,
+        },
+        auto: {
+          gains: state.auto.gains.slice(), expGain: state.auto.expGain,
+          low: state.auto.low, high: state.auto.high, median: state.auto.median,
+        },
+        wbEstimate: wbDiag,
+        expEstimate: expDiag,
+        crop: state.cropRect,
+        queue: { length: state.queue.length, index: state.queueIndex },
+        lastStats: state.lastStats
+          ? { median: state.lastStats.median, clipLo: state.lastStats.clipLo, clipHi: state.lastStats.clipHi }
+          : null,
+      };
+      const text = JSON.stringify(diag, null, 2);
+      console.log('[auto-tone-diag]', diag);
+      try {
+        await navigator.clipboard.writeText(text);
+        diagBtn.textContent = '已复制';
+      } catch (err) {
+        diagBtn.textContent = '已输出到控制台';
+      }
+      setTimeout(() => { diagBtn.textContent = '诊断'; }, 1600);
+    });
 
     window.addEventListener('resize', () => {
       syncCanvasMax();
