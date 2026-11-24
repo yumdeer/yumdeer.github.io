@@ -74,6 +74,113 @@
     return clamp(-Math.log(Math.min(1, r)) / 2.6, 0, 1);
   }
 
+  // ---------- 整卷去色罩模型（dmin+dmax / 特性曲线） ----------
+  // 原理：透光率 T = 线性光 / 片基线性光，密度 d = -log10(T)。
+  // 以片基为 dmin（归一后 d = 0），整卷最密处为高密度锚点 dmax。
+  // 彩色负片的橙色色罩让三个通道的 dmin 各不相同，按通道分别归一即可抵消；
+  // 锚点取自整卷而非单帧，同卷各帧共用一套映射，避免逐帧拉伸造成帧间闪烁。
+  var DENSITY_BINS = 512;
+  var DENSITY_STEP = 0.005;   // 密度分辨率，覆盖 0 ~ 2.56
+  var DEMASK_KNEE = 0.94;     // 高光端（高密度侧）软肩起点
+
+  function densityOf(px8, base8) {
+    var t = (srgbToLinear(px8) + 0.0005) / Math.max(0.018, srgbToLinear(base8));
+    return -Math.log10(Math.min(1, t));  // 比片基更亮（T>1）按 0 密度处理
+  }
+
+  // 累加一帧的密度分布；跳过纯黑边框与过曝白，避免污染锚点
+  function accumulateDensity(hist, data, base) {
+    var px = data.length / 4;
+    var stride = Math.max(1, Math.floor(px / 400000));
+    for (var p = 0; p < px; p += stride) {
+      var o = p * 4;
+      if (data[o + 3] === 0) continue;
+      var l = lum8(data[o], data[o + 1], data[o + 2]);
+      if (l < 10 || l > 248) continue;
+      for (var c = 0; c < 3; c++) {
+        var dv = densityOf(data[o + c], base[c]);
+        // 片基（及比片基更亮）不携带画面信息，排除后锚点才落在真正的画面密度上
+        if (dv < 0.03) continue;
+        var b = Math.round(dv / DENSITY_STEP);
+        if (b >= DENSITY_BINS) b = DENSITY_BINS - 1;
+        hist[c][b] += 1;
+      }
+    }
+  }
+
+  // 逐通道高分位估计未曝光片基（dmin 参考），忽略纯黑边框与过曝白
+  function transmittanceBase(data) {
+    var hs = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
+    var px = data.length / 4;
+    var stride = Math.max(1, Math.floor(px / 300000));
+    for (var p = 0; p < px; p += stride) {
+      var o = p * 4;
+      if (data[o + 3] === 0) continue;
+      var l = lum8(data[o], data[o + 1], data[o + 2]);
+      if (l < 10 || l > 250) continue;
+      hs[0][data[o]] += 1;
+      hs[1][data[o + 1]] += 1;
+      hs[2][data[o + 2]] += 1;
+    }
+    return hs.map(function (h) { return Math.max(8, percentile(h, 0.995)); });
+  }
+
+  function histPercentile(h, t) {
+    var total = 0, i;
+    for (i = 0; i < h.length; i++) total += h[i];
+    if (!total) return 0;
+    var target = total * clamp(t, 0, 1);
+    var acc = 0;
+    for (i = 0; i < h.length; i++) {
+      acc += h[i];
+      if (acc >= target) return i * DENSITY_STEP;
+    }
+    return (h.length - 1) * DENSITY_STEP;
+  }
+
+  // 由整卷直方图建立逐通道锚点：
+  // dmax = 整卷高密度参考（密度高分位），dmid = 整卷中间调密度（中位分位）
+  function buildDemaskModel(method, hists) {
+    var channels = [];
+    for (var c = 0; c < 3; c++) {
+      // 高密度锚点取整卷密度分布的 99.6% 分位（低透光率尾端），中间调取中位
+      var dmax = clamp(histPercentile(hists[c], 0.996), 0.30, 2.40);
+      var dmid = clamp(histPercentile(hists[c], 0.5), dmax * 0.30, dmax * 0.92);
+      channels.push({ dmax: dmax, dmid: dmid, nmid: clamp(dmid / dmax, 0.12, 0.90) });
+    }
+    return { method: method, channels: channels };
+  }
+
+  // 高光软肩：保留端点 0/1（片基仍为纯黑），只压缩接近最密处的过渡，
+  // 避免高密度区直接硬裁成死白
+  function softShoulder(n) {
+    if (n <= DEMASK_KNEE) return n;
+    var span = 1 - DEMASK_KNEE;
+    return DEMASK_KNEE + span * Math.tanh((n - DEMASK_KNEE) / span) / Math.tanh(1);
+  }
+
+  // 生成逐通道转换函数：dual = 双锚点线性；curve = 以整卷中间调为拐点的
+  // 两段斜率特性曲线（趾部 / 肩部），中间调固定落在 0.18 线性灰
+  function makeDemask(model, base) {
+    var ch = model.channels;
+    var k = [0, 0, 0];
+    for (var c = 0; c < 3; c++) k[c] = 1 / Math.max(0.018, srgbToLinear(base[c]));
+    var curve = model.method === "curve";
+    return function (c, px8) {
+      var t = (srgbToLinear(px8) + 0.0005) * k[c];
+      var d = -Math.log10(Math.min(1, t));
+      var m = ch[c];
+      var n = m.dmax > 0 ? d / m.dmax : 0;  // 0 = 片基（原场景黑场），1 = 整卷最密
+      if (curve) {
+        // 特性曲线：中间调（整卷中位密度）落在 18% 线性灰，趾部/肩部斜率由锚点决定
+        n = n < m.nmid
+          ? 0.18 * (n / m.nmid)
+          : 0.18 + 0.82 * ((n - m.nmid) / (1 - m.nmid));
+      }
+      return clamp(softShoulder(clamp(n, 0, 1.15)), 0, 1);
+    };
+  }
+
   // 自动色阶：片基归一后的逐通道直方图，取 0.5% / 99.5% 分位（跳过极端像素）
   function autoLevels(data, base) {
     var hists = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
@@ -97,7 +204,7 @@
   }
 
   // 灰场白平衡：取中等亮度、中等彩度的像素求各通道均值，算出增益
-  function whiteBalanceGains(data, base, levels) {
+  function whiteBalanceGains(data, base, levels, conv) {
     var sum = [0, 0, 0];
     var count = 0;
     var px = data.length / 4;
@@ -107,7 +214,7 @@
       var o = p * 4;
       if (data[o + 3] === 0) continue;
       for (var c = 0; c < 3; c++) {
-        rgb[c] = applyLevels(baseCorrect(data[o + c], base[c]), levels[c]);
+        rgb[c] = conv ? conv(c, data[o + c]) : applyLevels(baseCorrect(data[o + c], base[c]), levels[c]);
       }
       var l = lum01(rgb[0], rgb[1], rgb[2]);
       var max = Math.max(rgb[0], rgb[1], rgb[2]);
@@ -126,8 +233,13 @@
   }
 
   function analyze(data, base) {
+    var model = state.demaskModel;
+    if (model) {
+      var conv = makeDemask(model, base);
+      return { levels: null, gains: whiteBalanceGains(data, base, null, conv), demask: model };
+    }
     var levels = autoLevels(data, base);
-    return { levels: levels, gains: whiteBalanceGains(data, base, levels) };
+    return { levels: levels, gains: whiteBalanceGains(data, base, levels, null) };
   }
 
   // 正片直通：不做密度反相与色阶重映射，仅保留调色
@@ -1337,6 +1449,7 @@
   function render(src, dst, base, adj, analysis, curveLuts, hist) {
     var levels = analysis.levels;
     var gains = analysis.gains;
+    var conv = analysis.demask ? makeDemask(analysis.demask, base) : null;
     var positive = !!analysis.positive;
     var exposure = Math.pow(2, adj.exposure);
     var sat = 1 + adj.saturation * 0.01;
@@ -1357,7 +1470,7 @@
       for (var c = 0; c < 3; c++) {
         var v = positive
           ? clamp(src[i + c] / 255, 0, 1)
-          : applyLevels(baseCorrect(src[i + c], base[c]), levels[c]);
+          : conv ? conv(c, src[i + c]) : applyLevels(baseCorrect(src[i + c], base[c]), levels[c]);
         v = clamp(v * gains[c], 0, 1);
         v = applyUserLevels(v, black, white);
         rgb[c] = Math.pow(v, 1 / gamma) * exposure * (c === 0 ? kR : c === 1 ? kG : kB);
@@ -1443,6 +1556,8 @@
     detectedPositive: false, // 自动判断疑似正片
     toneIgnored: false,  // 用户忽略了正片提示
     positiveDiag: null,  // 正片判定的中间证据（score/ratio/edgeLum/edgeSat/vetoed）
+    demaskMethod: "dual", // 去色罩方法：frame 逐张 / dual dmin+dmax 整卷 / curve 特性曲线整卷
+    demaskModel: null,    // 整卷锚点模型 {method, channels:[{dmax,dmid,nmid}]}
     renderBuf: null,     // 预览渲染缓存（完整预览尺寸）
     curve: defaultCurve(),   // 曲线控制点 {rgb,r,g,b}
     curveChannel: "rgb",     // 当前编辑的曲线通道
@@ -1476,6 +1591,9 @@
     btnExport: document.getElementById("btn-export"),
     exportFormat: document.getElementById("export-format"),
     btnAutoBase: document.getElementById("btn-auto-base"),
+    demaskMethod: document.getElementById("demask-method"),
+    rollTag: document.getElementById("roll-tag"),
+    rollNote: document.getElementById("roll-note"),
     btnManualBase: document.getElementById("btn-manual-base"),
     baseSwatch: document.getElementById("base-swatch"),
     baseRgb: document.getElementById("base-rgb"),
@@ -1740,6 +1858,24 @@
       previewSize: function () { return { w: state.previewW, h: state.previewH, full: { w: state.fullW, h: state.fullH } }; },
       status: function () { return el.status ? el.status.textContent : ""; },
       editing: function () { return !!state.perspEditing; },
+      demask: function () {
+        return {
+          method: state.demaskMethod,
+          pending: !!state.rollPending,
+          model: state.demaskModel ? JSON.parse(JSON.stringify(state.demaskModel)) : null,
+          analysisDemask: !!(state.analysis && state.analysis.demask),
+          analysisLevels: !!(state.analysis && state.analysis.levels),
+          gains: state.analysis ? state.analysis.gains.slice() : null,
+          frames: state.queue.length,
+          items: state.queue.map(function (it) {
+            var h = it.rollHist;
+            return {
+              name: it.name,
+              sums: h ? [h[0].reduce(function (a, b) { return a + b; }, 0), h[1].reduce(function (a, b) { return a + b; }, 0), h[2].reduce(function (a, b) { return a + b; }, 0)] : null
+            };
+          })
+        };
+      },
       centerPixel: function () {
         var w = state.previewW, h = state.previewH;
         if (!state.previewData || !w || !h) return null;
@@ -2066,6 +2202,7 @@
     if (badCount) msgs.push("已忽略 " + badCount + " 个不支持类型的文件");
     if (overflow > 0) msgs.push("队列最多 " + MAX_QUEUE + " 张，超出的 " + overflow + " 张已忽略");
     renderQueue();
+    scheduleRollRebuild();
     if (msgs.length) setStatus(msgs.join("；"));
     else if (accepted.length && state.curId) setStatus("已添加 " + accepted.length + " 张，队列 " + state.queue.length + "/" + MAX_QUEUE + "。");
     if (!accepted.length) return;
@@ -2073,6 +2210,105 @@
       state.curId = firstAdded.id;
       loadItemIntoEditor(firstAdded);
       renderQueue();
+    }
+  }
+
+  // ---------- 整卷去色罩：统计队列内全部图片的密度分布 ----------
+  var rollToken = 0;
+  var rollTimer = 0;
+
+  // 单帧密度直方图（结果缓存在队列项上，切换方法不必重复解码）
+  function itemDensityHist(item) {
+    if (item.rollHist) return Promise.resolve(item.rollHist);
+    return decodeFile(item.file).then(function (bmp) {
+      var s = Math.min(1, 480 / Math.max(bmp.width, bmp.height));
+      var w = Math.max(1, Math.round(bmp.width * s));
+      var h = Math.max(1, Math.round(bmp.height * s));
+      var cnv = document.createElement("canvas");
+      cnv.width = w; cnv.height = h;
+      var cx = cnv.getContext("2d", { willReadFrequently: true });
+      cx.imageSmoothingQuality = "high";
+      cx.drawImage(bmp, 0, 0, w, h);
+      if (bmp.close) bmp.close();
+      var data = cx.getImageData(0, 0, w, h).data;
+      // 片基估计：优先用户/自动识别的结果；未打开过的帧用逐通道高分位，
+      // 比在缩小图上跑边缘检测更稳（缩略边缘太窄时容易误把画面当片基）。
+      var base = item.base || item.rollBase;
+      if (!base) {
+        base = transmittanceBase(data);
+        item.rollBase = base;
+      }
+      var hist = [new Uint32Array(DENSITY_BINS), new Uint32Array(DENSITY_BINS), new Uint32Array(DENSITY_BINS)];
+      accumulateDensity(hist, data, base);
+      item.rollHist = hist;
+      return hist;
+    }).catch(function () { return null; });
+  }
+
+  function scheduleRollRebuild() {
+    state.rollPending = true;
+    updateRollUI();
+    if (rollTimer) clearTimeout(rollTimer);
+    rollTimer = setTimeout(function () {
+      rollTimer = 0;
+      rebuildRollModel();
+    }, 120);
+  }
+
+  function rebuildRollModel() {
+    var method = state.demaskMethod;
+    if (method === "frame" || !state.queue.length) {
+      rollToken += 1;
+      state.rollPending = false;
+      state.demaskModel = null;
+      reanalyzeCurrent();
+      return;
+    }
+    var token = ++rollToken;
+    var merged = [new Uint32Array(DENSITY_BINS), new Uint32Array(DENSITY_BINS), new Uint32Array(DENSITY_BINS)];
+    state.rollPending = true;
+    updateRollUI();
+    var chain = Promise.resolve();
+    state.queue.forEach(function (item) {
+      chain = chain.then(function () {
+        if (token !== rollToken) return null;
+        return itemDensityHist(item).then(function (h) {
+          if (!h) return;
+          for (var c = 0; c < 3; c++) {
+            for (var i = 0; i < DENSITY_BINS; i++) merged[c][i] += h[c][i];
+          }
+        });
+      });
+    });
+    chain.then(function () {
+      if (token !== rollToken) return;
+      state.rollPending = false;
+      state.demaskModel = buildDemaskModel(method, merged);
+      reanalyzeCurrent();
+    });
+  }
+
+  function reanalyzeCurrent() {
+    if (state.previewData) {
+      state.analysis = state.positive ? analyzePositive() : analyze(state.previewData.data, state.base);
+      scheduleRender();
+    }
+    updateRollUI();
+  }
+
+  function updateRollUI() {
+    if (!el.rollTag) return;
+    var tag;
+    if (state.demaskMethod === "frame") {
+      tag = "逐张";
+    } else {
+      tag = state.rollPending ? "整卷 · 分析中" : "整卷 · " + state.queue.length + " 帧";
+    }
+    el.rollTag.textContent = tag;
+    if (el.rollNote) {
+      el.rollNote.textContent = state.demaskMethod === "frame"
+        ? "逐张模式只用当前帧估计锚点，缺少片基或密度范围时容易帧间不一致。"
+        : "整卷模型统计队列内 " + state.queue.length + " 帧的密度锚点，同卷各帧共用一套映射，优先使用。";
     }
   }
 
@@ -2122,6 +2358,7 @@
     if (i < 0) return;
     var wasCur = state.queue[i].id === state.curId;
     state.queue.splice(i, 1);
+    scheduleRollRebuild();
     if (!state.queue.length) {
       state.curId = null;
       resetToEmptyState();
@@ -2193,7 +2430,10 @@
      el.btnEditComp, el.btnResetAll, el.btnBatch, el.btnCrop].forEach(function (b) {
       if (b) b.disabled = true;
     });
+    if (el.demaskMethod) el.demaskMethod.disabled = true;
     if (el.exportFormat) el.exportFormat.disabled = true;
+    state.demaskModel = null;
+    updateRollUI();
     updateBaseUI();
     updateBaseMessage("载入图片后自动识别画面边缘的未曝光片基。");
     updatePerspectiveUI();
@@ -2281,6 +2521,10 @@
        el.btnManualBase, el.btnExportParams, el.btnImportParams, el.btnResetAdj, el.btnCurveReset, el.btnCrop].forEach(function (b) {
         if (b) b.disabled = false;
       });
+      if (el.demaskMethod) {
+        el.demaskMethod.disabled = false;
+        el.demaskMethod.value = state.demaskMethod;
+      }
       if (el.exportFormat) el.exportFormat.disabled = false;
       if (el.exportFormat) {
         var origOpt = el.exportFormat.querySelector('option[value="original"]');
@@ -2460,11 +2704,27 @@
     state.baseConfidence = sampled.confidence || 0;
     state.baseSamples = sampled.samples || 0;
     state.analysis = analyze(state.previewData.data, state.base);
+    invalidateCurrentRollCache();
     updateBaseUI();
     updateBaseMessage(sampled.message);
     setSampling(false);
     markEdited();
     scheduleRender();
+  });
+
+  function invalidateCurrentRollCache() {
+    var i = queueIndexOf(state.curId);
+    if (i >= 0) {
+      state.queue[i].rollHist = null;
+      state.queue[i].rollBase = null;
+    }
+    scheduleRollRebuild();
+  }
+
+  if (el.demaskMethod) el.demaskMethod.addEventListener("change", function () {
+    state.demaskMethod = el.demaskMethod.value;
+    updateRollUI();
+    rebuildRollModel();
   });
 
   el.btnAutoBase.addEventListener("click", function () {
@@ -2475,6 +2735,7 @@
     state.baseConfidence = detected.confidence || 0;
     state.baseSamples = detected.samples || 0;
     state.analysis = analyze(state.previewData.data, state.base);
+    invalidateCurrentRollCache();
     updateBaseUI();
     updateBaseMessage(detected.message);
     setSampling(false);
@@ -2927,6 +3188,7 @@
       base: { rgb: state.base.slice(), source: state.baseSource, confidence: state.baseConfidence, samples: state.baseSamples },
       positive: { positive: state.positive, detectedPositive: state.detectedPositive, toneIgnored: state.toneIgnored, evidence: state.positiveDiag },
       analysis: state.analysis,
+      demask: { method: state.demaskMethod, model: state.demaskModel, frames: state.queue.length },
       perspective: state.perspective,
       crop: state.crop,
       queue: { length: state.queue.length }

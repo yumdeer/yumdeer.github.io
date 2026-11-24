@@ -753,6 +753,17 @@ button:disabled {
 .crop-handle[data-handle="se"] { right: -8px; bottom: -8px; cursor: nwse-resize; }
 
 /* ---- 分卷选择 ---- */
+.demask-row {
+  margin-top: 8px;
+}
+
+.demask-row .format-select {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
 .split-row {
   display: flex;
   align-items: center;
