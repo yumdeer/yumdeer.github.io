@@ -14,7 +14,7 @@ const tools: Tool[] = [
   {
     title: '胶片自动分帧',
     href: '/tools/film-autoclip/',
-    desc: '自动识别胶片扫描条中的画格并批量裁切导出，支持正片 / 负片与 TIFF、BMP 格式，全部在本地浏览器内完成。',
+    desc: '自动识别胶片扫描条中的画格并批量裁切导出，支持正片 / 负片与 TIFF、BMP 格式。',
     tag: 'FILM',
   },
   {
@@ -32,7 +32,7 @@ const tools: Tool[] = [
   {
     title: '自动曝光 / 白平衡',
     href: '/tools/auto-tone/',
-    desc: '分析直方图与色阶，自动校正曝光和色温偏色，支持灰度世界、白点、Shades of Gray 与自适应白平衡，内置色彩平衡、色相/饱和度、可选颜色等 Photoshop 风格调色，可手动微调并导出，全部在本地浏览器内完成。',
+    desc: '分析直方图与色阶，自动校正曝光和色温偏色，支持灰度世界、白点、Shades of Gray 与自适应白平衡，内置色彩平衡、色相/饱和度、可选颜色等 Photoshop 风格调色，可手动微调并导出。',
     tag: 'COLOR',
   },
 ];
@@ -41,7 +41,7 @@ const tools: Tool[] = [
 <Layout title="小工具" description={`小工具 · ${site.nameZh}`} activePath="/tools/">
   <div class="tools-page">
     <h1>TOOLS</h1>
-    <p class="tools-intro">一些自用的小工具，会陆续增加。</p>
+    <p class="tools-intro">一些自用的小工具，会陆续增加。图片本地处理 · 不上传。</p>
 
     <ul class="tools-grid">
       {tools.map((tool) => (
