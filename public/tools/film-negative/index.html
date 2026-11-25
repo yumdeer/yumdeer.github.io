@@ -91,6 +91,7 @@
           <select id="export-format" class="format-select" aria-label="导出格式" disabled>
             <option value="jpeg">JPEG</option>
             <option value="png">PNG</option>
+            <option value="png16">PNG 16bit</option>
             <option value="webp">WebP</option>
             <option value="tiff">TIFF</option>
             <option value="original">原图格式</option>
@@ -129,6 +130,7 @@
             <span class="compare-tag compare-tag-after">原片（负片）</span>
             <div id="compare-divider" class="compare-divider"><span class="compare-handle"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1c1b18" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5"></path></svg></span></div>
           </div>
+          <div id="chart-overlay" class="chart-overlay" hidden><canvas></canvas></div>
           <div id="crop-overlay" class="crop-overlay" hidden>
             <div id="crop-box" class="crop-box" data-handle="move">
               <span class="crop-handle" data-handle="nw"></span>
@@ -216,7 +218,68 @@
             <option value="curve">特性曲线</option>
           </select>
         </label>
+        <label class="split-row">中性平衡
+          <input type="range" id="gray-strength" min="0" max="100" step="5" value="35" disabled aria-label="灰轴对齐强度">
+          <span id="gray-value" class="value">35%</span>
+        </label>
+        <label class="split-row">密度目标
+          <input type="checkbox" id="density-on" disabled aria-label="启用密度目标">
+          <span class="value" id="density-label">Dmin 0.00</span>
+        </label>
+        <label class="split-row" id="density-min-row" hidden>黑场密度
+          <input type="range" id="density-min" min="0" max="50" step="1" value="0" aria-label="黑场密度">
+          <span id="density-min-value" class="value">0.00</span>
+        </label>
+        <label class="split-row" id="density-max-row" hidden>白场密度
+          <input type="range" id="density-max" min="80" max="300" step="5" value="200" aria-label="白场密度">
+          <span id="density-max-value" class="value">2.00</span>
+        </label>
         <p id="roll-note" class="card-note">整卷模型统计队列内各帧的密度锚点，同卷各帧共用一套映射，优先使用。</p>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>平场校正</h2>
+          <span id="flat-tag" class="tag">未载入</span>
+        </div>
+        <label class="split-row">强度
+          <input type="range" id="flat-strength" min="0" max="100" step="5" value="100" disabled aria-label="平场校正强度">
+          <span id="flat-value" class="value">100%</span>
+        </label>
+        <div class="card-actions">
+          <button id="btn-flat" class="ghost-btn" type="button">载入平场参考</button>
+          <button id="btn-flat-clear" class="ghost-btn" type="button" disabled>清除</button>
+        </div>
+        <input type="file" id="flat-input" accept="image/*,.tif,.tiff" hidden>
+        <p id="flat-note" class="card-note">用一张均匀曝光的空片参考，压掉灯箱与镜头造成的亮度不均和暗角。平场只作用于成片映射，不参与整卷锚点统计。</p>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>色卡 / CCM</h2>
+          <span id="ccm-tag" class="tag">未标定</span>
+        </div>
+        <label class="split-row">强度
+          <input type="range" id="ccm-strength" min="0" max="100" step="5" value="100" disabled aria-label="色卡校正强度">
+          <span id="ccm-value" class="value">100%</span>
+        </label>
+        <div class="card-actions">
+          <button id="btn-chart" class="ghost-btn" type="button" disabled>框选色卡</button>
+          <button id="btn-ccm-clear" class="ghost-btn" type="button" disabled>清除</button>
+        </div>
+        <p id="ccm-note" class="card-note">点「框选色卡」后依次点选色卡四角（左上→右上→右下→左下），按 ColorChecker Classic 24 色布局解算 3×3 CCM。需整卷去色罩模型。</p>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>镜头校正</h2>
+          <span id="lens-tag" class="tag">关闭</span>
+        </div>
+        <label class="split-row">径像
+          <input type="range" id="lens-k" min="-100" max="100" step="5" value="0" disabled aria-label="镜头径像畸变校正">
+          <span id="lens-value" class="value">0</span>
+        </label>
+        <p id="lens-note" class="card-note">负值校正桶形（四角外扩），正值校正枕形；改动会重置当前帧的透视与裁剪。</p>
       </div>
 
       <div class="card">
@@ -263,6 +326,6 @@
   <script src="lib/pako.min.js"></script>
   <script src="lib/UTIF.js"></script>
   <script src="lib/jszip.min.js"></script>
-  <script src="app.js?v=1.4.0"></script>
+  <script src="app.js?v=1.7.0"></script>
 </body>
 </html>

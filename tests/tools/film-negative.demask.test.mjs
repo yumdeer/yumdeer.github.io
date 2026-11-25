@@ -189,3 +189,47 @@ test("橙色负片条带在整卷模型下仍判为负片", async () => {
     await page.close();
   }
 });
+
+test("排除某帧后不再参与整卷统计", async () => {
+  const page = await openTool();
+  try {
+    await page.setInputFiles("#file-input", [path.join(tmpDir, "light.png"), path.join(tmpDir, "dense.png")]);
+    const both = await waitDemask(page);
+    const sumBoth = both.model.channels.reduce((s, ch) => s + ch.dmax, 0);
+    assert.equal(both.frames, 2);
+
+    await page.locator(".qcard").nth(1).locator(".qskip").click();
+    const one = await waitDemask(page);
+    const sumOne = one.model.channels.reduce((s, ch) => s + ch.dmax, 0);
+    assert.ok(sumOne < sumBoth - 0.02, `排除深密度帧后锚点应回落，实际 ${sumBoth.toFixed(3)} → ${sumOne.toFixed(3)}`);
+    assert.match(await page.textContent("#roll-tag"), /排除 1/);
+    assert.match(await page.textContent("#roll-note"), /已排除 1 帧/);
+
+    await page.locator(".qcard").nth(1).locator(".qskip").click();
+    const back = await waitDemask(page);
+    assert.ok(back.model.channels.reduce((s, ch) => s + ch.dmax, 0) > sumOne + 0.02, "恢复纳入后锚点应回到两帧水平");
+  } finally {
+    await page.close();
+  }
+});
+
+test("中性平衡强度控制灰轴正则增益", async () => {
+  const page = await openTool();
+  try {
+    await page.setInputFiles("#file-input", [path.join(tmpDir, "light.png"), path.join(tmpDir, "dense.png")]);
+    await waitDemask(page);
+
+    await page.locator("#gray-strength").fill("0");
+    const off = await waitDemask(page);
+    assert.equal(off.model.gray, 0);
+    for (const ch of off.model.channels) assert.equal(ch.gain, 1, "关闭时不应有通道增益");
+
+    await page.locator("#gray-strength").fill("100");
+    const full = await waitDemask(page);
+    assert.equal(full.model.gray, 1);
+    const gains = full.model.channels.map((ch) => ch.gain);
+    assert.ok(gains.some((g) => Math.abs(g - 1) > 0.001), "满强度时通道增益应对齐中间调");
+  } finally {
+    await page.close();
+  }
+});

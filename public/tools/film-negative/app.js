@@ -140,15 +140,36 @@
 
   // 由整卷直方图建立逐通道锚点：
   // dmax = 整卷高密度参考（密度高分位），dmid = 整卷中间调密度（中位分位）
-  function buildDemaskModel(method, hists) {
+  function buildDemaskModel(method, hists, gray, density) {
     var channels = [];
+    var useTarget = !!(density && density.on);
     for (var c = 0; c < 3; c++) {
       // 高密度锚点取整卷密度分布的 99.6% 分位（低透光率尾端），中间调取中位
-      var dmax = clamp(histPercentile(hists[c], 0.996), 0.30, 2.40);
-      var dmid = clamp(histPercentile(hists[c], 0.5), dmax * 0.30, dmax * 0.92);
-      channels.push({ dmax: dmax, dmid: dmid, nmid: clamp(dmid / dmax, 0.12, 0.90) });
+      var histDmax = clamp(histPercentile(hists[c], 0.996), 0.30, 2.40);
+      var dmid = clamp(histPercentile(hists[c], 0.5), histDmax * 0.30, histDmax * 0.92);
+      var dmin = 0, dmax = histDmax;
+      if (useTarget) {
+        // 密度目标：用用户给定的黑白场密度替换统计锚点（APD/Status M 的近似实现）
+        dmin = clamp(density.dmin, 0, 1);
+        dmax = Math.max(dmin + 0.3, clamp(density.dmax, 0.3, 4));
+      }
+      var span = Math.max(0.05, dmax - dmin);
+      channels.push({
+        dmin: dmin, dmax: dmax, dmid: dmid,
+        nmid: clamp((dmid - dmin) / span, 0.12, 0.90), gain: 1
+      });
     }
-    return { method: method, channels: channels };
+    // 灰轴正则：把三个通道的整卷中间调往整卷均值靠拢（强度 gray ∈ [0,1]）。
+    // 只作用于双锚点线性映射；特性曲线本身已强制中间调落在同一水平。
+    var meanMid = (channels[0].nmid + channels[1].nmid + channels[2].nmid) / 3;
+    var k = clamp(gray, 0, 1);
+    if (method === "dual" && k > 0) {
+      for (var i = 0; i < 3; i++) {
+        var target = channels[i].nmid + k * (meanMid - channels[i].nmid);
+        channels[i].gain = clamp(target / Math.max(0.05, channels[i].nmid), 0.55, 1.8);
+      }
+    }
+    return { method: method, channels: channels, gray: k, density: useTarget ? { on: true, dmin: density.dmin, dmax: density.dmax } : null };
   }
 
   // 高光软肩：保留端点 0/1（片基仍为纯黑），只压缩接近最密处的过渡，
@@ -170,7 +191,10 @@
       var t = (srgbToLinear(px8) + 0.0005) * k[c];
       var d = -Math.log10(Math.min(1, t));
       var m = ch[c];
-      var n = m.dmax > 0 ? d / m.dmax : 0;  // 0 = 片基（原场景黑场），1 = 整卷最密
+      // 0 = 片基（原场景黑场），1 = 整卷最密；启用密度目标时按 Dmin/Dmax 重映射
+      var span = Math.max(0.05, m.dmax - (m.dmin || 0));
+      var n = (d - (m.dmin || 0)) / span;
+      if (m.gain && m.gain !== 1) n *= m.gain;
       if (curve) {
         // 特性曲线：中间调（整卷中位密度）落在 18% 线性灰，趾部/肩部斜率由锚点决定
         n = n < m.nmid
@@ -723,6 +747,44 @@
   }
 
   // 透视矫正统一入口：local 走锚定中心的边缘抚直，global 走单应拉正
+  // 镜头径像畸变校正：输出坐标按 1 + k*r² 反查源坐标并双线性采样
+  // k<0 桶形校正（四角内容外扩），k>0 枕形校正；r 以半对角线归一。
+  function warpLensCanvas(source, k) {
+    if (!k) return source;
+    var W = source.width, H = source.height;
+    var sctx = source.getContext("2d");
+    var src = sctx.getImageData(0, 0, W, H);
+    var out = sctx.createImageData(W, H);
+    var cx = (W - 1) / 2, cy = (H - 1) / 2;
+    var half = Math.hypot(cx, cy) || 1;
+    var sd = src.data, od = out.data;
+    for (var y = 0; y < H; y++) {
+      var dy = (y - cy) / half;
+      for (var x = 0; x < W; x++) {
+        var dx = (x - cx) / half;
+        var f = 1 + k * (dx * dx + dy * dy);
+        var sx = cx + (x - cx) * f;
+        var sy = cy + (y - cy) * f;
+        var o = (y * W + x) * 4;
+        if (sx < 0 || sy < 0 || sx > W - 1 || sy > H - 1) { od[o + 3] = 0; continue; }
+        var x0 = Math.floor(sx), y0 = Math.floor(sy);
+        var x1 = Math.min(W - 1, x0 + 1), y1 = Math.min(H - 1, y0 + 1);
+        var tx = sx - x0, ty = sy - y0;
+        for (var c = 0; c < 3; c++) {
+          var a = sd[(y0 * W + x0) * 4 + c], b = sd[(y0 * W + x1) * 4 + c];
+          var d2 = sd[(y1 * W + x0) * 4 + c], e = sd[(y1 * W + x1) * 4 + c];
+          od[o + c] = (a + (b - a) * tx) * (1 - ty) + (d2 + (e - d2) * tx) * ty;
+        }
+        od[o + 3] = 255;
+      }
+    }
+    var cnv = document.createElement("canvas");
+    cnv.width = W;
+    cnv.height = H;
+    cnv.getContext("2d").putImageData(out, 0, 0);
+    return cnv;
+  }
+
   function warpPerspectiveCanvas(cnv, persp) {
     if (!persp || !persp.quad || !persp.on) return null;
     if (persp.mode === "local" && persp.edgeData) {
@@ -1446,7 +1508,289 @@
     drawCurve();
   }
 
-  function render(src, dst, base, adj, analysis, curveLuts, hist) {
+  // ---------- 平场校正 ----------
+  // 参考图统一缩到 320px，逐通道存线性增益（参考均值 / 局部值），
+  // 渲染时按归一化画面坐标双线性采样，强度按线性插值混合。
+  var FLAT_MAX = 320;
+  var SRGB_LIN = (function () {
+    var t = new Float32Array(256);
+    for (var i = 0; i < 256; i++) t[i] = srgbToLinear(i);
+    return t;
+  })();
+  var LIN_SRGB_LUT = null;
+  function linToSrgb8(lin) {
+    if (!LIN_SRGB_LUT) {
+      LIN_SRGB_LUT = new Uint8Array(4097);
+      for (var i = 0; i <= 4096; i++) LIN_SRGB_LUT[i] = linearToSrgb(i / 4096);
+    }
+    return LIN_SRGB_LUT[Math.round(clamp(lin, 0, 1) * 4096)];
+  }
+
+  function buildFlatModel(data, w, h) {
+    var n = w * h;
+    var gain = [new Float32Array(n), new Float32Array(n), new Float32Array(n)];
+    var mean = [0, 0, 0];
+    for (var p = 0; p < n; p++) {
+      var o = p * 4;
+      mean[0] += SRGB_LIN[data[o]];
+      mean[1] += SRGB_LIN[data[o + 1]];
+      mean[2] += SRGB_LIN[data[o + 2]];
+    }
+    for (var c = 0; c < 3; c++) mean[c] = Math.max(0.0015, mean[c] / Math.max(1, n));
+    for (var q = 0; q < n; q++) {
+      var oo = q * 4;
+      for (var k = 0; k < 3; k++) {
+        gain[k][q] = clamp(mean[k] / Math.max(0.0015, SRGB_LIN[data[oo + k]]), 0.2, 5);
+      }
+    }
+    return { w: w, h: h, gain: gain };
+  }
+
+  function sampleFlatGain(flat, c, u, v) {
+    var fx = clamp(u, 0, 1) * (flat.w - 1);
+    var fy = clamp(v, 0, 1) * (flat.h - 1);
+    var x0 = Math.floor(fx), y0 = Math.floor(fy);
+    var x1 = Math.min(flat.w - 1, x0 + 1), y1 = Math.min(flat.h - 1, y0 + 1);
+    var tx = fx - x0, ty = fy - y0;
+    var g = flat.gain[c];
+    var a = g[y0 * flat.w + x0], b = g[y0 * flat.w + x1];
+    var d = g[y1 * flat.w + x0], e = g[y1 * flat.w + x1];
+    return (a + (b - a) * tx) * (1 - ty) + (d + (e - d) * tx) * ty;
+  }
+
+  // 单通道平场校正（8bit sRGB 输入输出），u/v 为归一化画面坐标
+  function flatCorrect8(px8, c, u, v, flat, strength) {
+    if (!flat || strength <= 0) return px8;
+    var g = 1 + (sampleFlatGain(flat, c, u, v) - 1) * strength;
+    return linToSrgb8(clamp(SRGB_LIN[px8] * g, 0, 1));
+  }
+
+  // ---------- 卷内色卡 + CCM ----------
+  // ColorChecker Classic 24 色 sRGB 参考（D65，按 6×4 排列：左上起逐行）
+  var CC_REF = [
+    [115, 82, 68], [194, 150, 130], [98, 122, 157], [87, 108, 67], [133, 128, 177], [103, 189, 170],
+    [214, 126, 44], [80, 91, 166], [193, 90, 99], [94, 60, 108], [157, 188, 64], [224, 163, 46],
+    [56, 61, 150], [70, 148, 73], [175, 54, 60], [231, 199, 31], [187, 86, 149], [8, 133, 161],
+    [243, 243, 242], [200, 200, 200], [160, 160, 160], [122, 122, 121], [85, 85, 85], [52, 52, 52]
+  ];
+  var CC_REF_LIN = CC_REF.map(function (c) {
+    return [srgbToLinear(c[0]), srgbToLinear(c[1]), srgbToLinear(c[2])];
+  });
+
+  // 四角双线性映射：q = [TL, TR, BR, BL]，u/v ∈ [0,1]
+  function quadPoint(q, u, v) {
+    var ax = q[0][0] + (q[1][0] - q[0][0]) * u;
+    var ay = q[0][1] + (q[1][1] - q[0][1]) * u;
+    var bx = q[3][0] + (q[2][0] - q[3][0]) * u;
+    var by = q[3][1] + (q[2][1] - q[3][1]) * u;
+    return [ax + (bx - ax) * v, ay + (by - ay) * v];
+  }
+
+  // 色块取样：中心方块截尾均值（去掉 20% 两端），抗噪点与边缘
+  function samplePatch8(data, w, h, cx, cy, rad) {
+    var xs = Math.max(0, Math.round(cx) - rad), xe = Math.min(w - 1, Math.round(cx) + rad);
+    var ys = Math.max(0, Math.round(cy) - rad), ye = Math.min(h - 1, Math.round(cy) + rad);
+    var out = [[], [], []];
+    for (var y = ys; y <= ye; y++) {
+      for (var x = xs; x <= xe; x++) {
+        var o = (y * w + x) * 4;
+        out[0].push(data[o]); out[1].push(data[o + 1]); out[2].push(data[o + 2]);
+      }
+    }
+    return out.map(function (arr) { return trimmedMean(arr, 0.2); });
+  }
+
+  // 3×3 线性方程（部分主元高斯消元）
+  function solve3(a, b) {
+    var m = [a[0].slice(), a[1].slice(), a[2].slice()];
+    var y = b.slice();
+    for (var col = 0; col < 3; col++) {
+      var piv = col;
+      for (var r = col + 1; r < 3; r++) if (Math.abs(m[r][col]) > Math.abs(m[piv][col])) piv = r;
+      if (piv !== col) {
+        var tr = m[col]; m[col] = m[piv]; m[piv] = tr;
+        var ty = y[col]; y[col] = y[piv]; y[piv] = ty;
+      }
+      var dv = m[col][col];
+      if (Math.abs(dv) < 1e-9) continue;
+      for (var r2 = col + 1; r2 < 3; r2++) {
+        var f = m[r2][col] / dv;
+        for (var c2 = col; c2 < 3; c2++) m[r2][c2] -= f * m[col][c2];
+        y[r2] -= f * y[col];
+      }
+    }
+    var x = [0, 0, 0];
+    for (var i = 2; i >= 0; i--) {
+      var s = y[i];
+      for (var j = i + 1; j < 3; j++) s -= m[i][j] * x[j];
+      x[i] = Math.abs(m[i][i]) < 1e-9 ? 0 : s / m[i][i];
+    }
+    return x;
+  }
+
+  // 最小二乘 + 岭回归解 CCM：measured/targets 为 24×3 线性 RGB，返回 3×3（行=输出通道）
+  function solveCcm(measured, targets) {
+    var A = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+    var B = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+    for (var i = 0; i < measured.length; i++) {
+      var s = measured[i], t = targets[i];
+      for (var r = 0; r < 3; r++) {
+        for (var c = 0; c < 3; c++) {
+          A[r][c] += s[r] * s[c];
+          B[r][c] += s[r] * t[c];
+        }
+      }
+    }
+    var lambda = 0.02;
+    var M = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+    for (var ch = 0; ch < 3; ch++) {
+      var a = [A[0].slice(), A[1].slice(), A[2].slice()];
+      var b = [B[0][ch], B[1][ch], B[2][ch]];
+      for (var k = 0; k < 3; k++) {
+        a[k][k] += lambda;
+        b[k] += lambda * (k === ch ? 1 : 0);
+      }
+      M[ch] = solve3(a, b);
+    }
+    // 白点保持：用第 19 块（白）把每行缩放到目标白，避免整体偏色
+    var white = measured[18], tw = targets[18];
+    for (var row = 0; row < 3; row++) {
+      var dot = M[row][0] * white[0] + M[row][1] * white[1] + M[row][2] * white[2];
+      var scale = clamp(tw[row] / Math.max(1e-4, dot), 0.4, 2.5);
+      for (var q = 0; q < 3; q++) M[row][q] = clamp(M[row][q] * scale, -1.8, 2.8);
+    }
+    return M;
+  }
+
+  function ccmApply(ccm, vals, k) {
+    var m = ccm.matrix, out = [0, 0, 0];
+    for (var r = 0; r < 3; r++) {
+      var sum = 0;
+      for (var q = 0; q < 3; q++) {
+        var id = q === r ? 1 : 0;
+        sum += (id + (m[r][q] - id) * k) * vals[q];
+      }
+      out[r] = clamp(sum, 0, 1);
+    }
+    return out;
+  }
+
+  // 用当前帧的四角 + 整卷去色罩模型解算 CCM
+  function solveChartFromQuad(quad) {
+    if (!state.previewData) return { error: "请先载入图片" };
+    var model = state.demaskModel;
+    if (!model) return { error: "色卡 CCM 需要整卷模型：请把去色罩方法设为 dmin+dmax 或特性曲线" };
+    var conv = makeDemask(model, state.base);
+    var w = state.previewW, h = state.previewH;
+    var topW = Math.hypot(quad[1][0] - quad[0][0], quad[1][1] - quad[0][1]) * w;
+    var leftH = Math.hypot(quad[3][0] - quad[0][0], quad[3][1] - quad[0][1]) * h;
+    var rad = Math.max(2, Math.round(Math.min(topW / 6, leftH / 4) * 0.22));
+    var measured = [], targets = [];
+    for (var row = 0; row < 4; row++) {
+      for (var col = 0; col < 6; col++) {
+        var p = quadPoint(quad, (col + 0.5) / 6, (row + 0.5) / 4);
+        var s8 = samplePatch8(state.previewData.data, w, h, p[0] * w, p[1] * h, rad);
+        measured.push([conv(0, s8[0]), conv(1, s8[1]), conv(2, s8[2])]);
+        targets.push(CC_REF_LIN[row * 6 + col]);
+      }
+    }
+    return { matrix: solveCcm(measured, targets) };
+  }
+
+  function onChartClick(e) {
+    var rect = el.canvas.getBoundingClientRect();
+    var dx = clamp((e.clientX - rect.left) / Math.max(1, rect.width), 0, 1);
+    var dy = clamp((e.clientY - rect.top) / Math.max(1, rect.height), 0, 1);
+    var crop = cropPxOf(state.previewW, state.previewH);
+    var px = crop ? (crop.x + dx * crop.w) / state.previewW : dx;
+    var py = crop ? (crop.y + dy * crop.h) / state.previewH : dy;
+    state.chartQuad.push([clamp(px, 0, 1), clamp(py, 0, 1)]);
+    syncChartOverlay();
+    if (state.chartQuad.length < 4) {
+      setStatus("色卡取角 " + state.chartQuad.length + "/4（左上 → 右上 → 右下 → 左下）");
+      return;
+    }
+    state.chartPicking = false;
+    if (el.canvas) el.canvas.classList.remove("is-sampling");
+    var res = solveChartFromQuad(state.chartQuad);
+    if (res && res.error) {
+      state.chartQuad = [];
+      if (el.chartOverlay) el.chartOverlay.hidden = true;
+      if (el.ccmTag) el.ccmTag.textContent = "标定失败";
+      if (el.ccmNote) el.ccmNote.textContent = res.error;
+      setStatus(res.error);
+      return;
+    }
+    state.ccm = { matrix: res.matrix };
+    if (el.chartOverlay) setTimeout(function () { el.chartOverlay.hidden = true; if (el.canvas) el.canvas.classList.remove("is-sampling"); }, 350);
+    if (el.ccmTag) el.ccmTag.textContent = "已标定";
+    if (el.ccmStrength) {
+      el.ccmStrength.disabled = false;
+      el.ccmStrength.value = String(Math.round(state.ccmStrength * 100));
+    }
+    if (el.ccmValue) el.ccmValue.textContent = Math.round(state.ccmStrength * 100) + "%";
+    if (el.btnCcmClear) el.btnCcmClear.disabled = false;
+    if (el.ccmNote) {
+      el.ccmNote.textContent = "CCM：" + res.matrix.map(function (row) {
+        return row.map(function (v) { return v.toFixed(2); }).join(" ");
+      }).join(" / ");
+    }
+    setStatus("色卡 CCM 已解算，可调强度或清除");
+    scheduleRender();
+  }
+
+  // 色卡四角取点叠加层（跟随画布显示尺寸）
+  function syncChartOverlay() {
+    var ov = el.chartOverlay;
+    if (!ov || ov.hidden || !el.canvas) return;
+    var cv = el.canvas;
+    ov.style.left = cv.offsetLeft + "px";
+    ov.style.top = cv.offsetTop + "px";
+    ov.style.width = cv.offsetWidth + "px";
+    ov.style.height = cv.offsetHeight + "px";
+    var c = ov.querySelector("canvas");
+    var dw = Math.max(1, cv.offsetWidth), dh = Math.max(1, cv.offsetHeight);
+    if (c.width !== dw) c.width = dw;
+    if (c.height !== dh) c.height = dh;
+    var ctx = c.getContext("2d");
+    ctx.clearRect(0, 0, dw, dh);
+    var pts = state.chartQuad;
+    if (!pts.length) return;
+    var crop = cropPxOf(state.previewW, state.previewH);
+    var map = function (p) {
+      var rx = crop ? (p[0] * state.previewW - crop.x) / crop.w : p[0];
+      var ry = crop ? (p[1] * state.previewH - crop.y) / crop.h : p[1];
+      return [rx * dw, ry * dh];
+    };
+    ctx.lineWidth = 1.5;
+    pts.forEach(function (p) {
+      var q = map(p);
+      ctx.beginPath();
+      ctx.arc(q[0], q[1], 4, 0, Math.PI * 2);
+      ctx.fillStyle = "#f5c542";
+      ctx.fill();
+    });
+    if (pts.length === 4) {
+      var qs = pts.map(map);
+      ctx.strokeStyle = "#f5c542";
+      ctx.beginPath();
+      ctx.moveTo(qs[0][0], qs[0][1]);
+      for (var i = 1; i < 4; i++) ctx.lineTo(qs[i][0], qs[i][1]);
+      ctx.closePath();
+      ctx.stroke();
+      for (var r = 0; r < 4; r++) {
+        for (var cx = 0; cx < 6; cx++) {
+          var q = map(quadPoint(pts, (cx + 0.5) / 6, (r + 0.5) / 4));
+          ctx.beginPath();
+          ctx.arc(q[0], q[1], 2, 0, Math.PI * 2);
+          ctx.fillStyle = "#fff";
+          ctx.fill();
+        }
+      }
+    }
+  }
+
+  function render(src, dst, base, adj, analysis, curveLuts, hist, w, h) {
     var levels = analysis.levels;
     var gains = analysis.gains;
     var conv = analysis.demask ? makeDemask(analysis.demask, base) : null;
@@ -1461,17 +1805,32 @@
     var black = clamp(adj.blackPoint / 100, 0, 0.95);
     var white = Math.max(clamp(adj.whitePoint / 100, 0.05, 1), black + 0.02);
     var tmp = [0, 0, 0];
+    var flat = state.flat, flatK = state.flatStrength;
+    var useFlat = !!(flat && flatK > 0 && w > 0 && h > 0);
+    var ccm = state.ccmStrength > 0 ? state.ccm : null;
+    var ccmK = state.ccmStrength;
     for (var i = 0; i < src.length; i += 4) {
       if (src[i + 3] === 0) {
         dst[i] = dst[i + 1] = dst[i + 2] = dst[i + 3] = 0;
         continue;
       }
       var rgb = [0, 0, 0];
+      var fu = 0, fv = 0;
+      if (useFlat) {
+        var pi = i >> 2;
+        var pxx = pi % w;
+        fu = pxx / w;
+        fv = ((pi - pxx) / w) / h;
+      }
+      for (var rc = 0; rc < 3; rc++) {
+        var rawc = useFlat ? flatCorrect8(src[i + rc], rc, fu, fv, flat, flatK) : src[i + rc];
+        rgb[rc] = positive
+          ? clamp(rawc / 255, 0, 1)
+          : conv ? conv(rc, rawc) : applyLevels(baseCorrect(rawc, base[rc]), levels[rc]);
+      }
+      if (ccm && conv) rgb = ccmApply(ccm, rgb, ccmK);
       for (var c = 0; c < 3; c++) {
-        var v = positive
-          ? clamp(src[i + c] / 255, 0, 1)
-          : conv ? conv(c, src[i + c]) : applyLevels(baseCorrect(src[i + c], base[c]), levels[c]);
-        v = clamp(v * gains[c], 0, 1);
+        var v = clamp(rgb[c] * gains[c], 0, 1);
         v = applyUserLevels(v, black, white);
         rgb[c] = Math.pow(v, 1 / gamma) * exposure * (c === 0 ? kR : c === 1 ? kG : kB);
         rgb[c] = clamp(rgb[c], 0, 1);
@@ -1497,6 +1856,150 @@
       dst[i + 2] = b8;
       dst[i + 3] = src[i + 3];
     }
+  }
+
+  // ---------- 16bit 输出 ----------
+  function linearToSrgb16(v) {
+    var t = clamp(v, 0, 1);
+    var s = t <= 0.0031308 ? t * 12.92 : 1.055 * Math.pow(t, 1 / 2.4) - 0.055;
+    return clamp(Math.round(s * 65535), 0, 65535);
+  }
+
+  // 8bit 曲线 LUT 在 16bit 域线性插值，避免宽色深被 LUT 重新压回 256 级
+  function curve16(lut, v16) {
+    var f = v16 * (255 / 65535);
+    var i0 = Math.min(254, Math.floor(f));
+    return Math.round((lut[i0] + (lut[i0 + 1] - lut[i0]) * (f - i0)) * 257);
+  }
+
+  // 宽色深渲染：映射链与 render 一致，输出 16bit sRGB RGB（矩形区域裁剪在循环内完成）
+  function render16(src, w, h, rect, base, adj, analysis, curveLuts) {
+    var levels = analysis.levels;
+    var gains = analysis.gains;
+    var conv = analysis.demask ? makeDemask(analysis.demask, base) : null;
+    var positive = !!analysis.positive;
+    var exposure = Math.pow(2, adj.exposure);
+    var sat = 1 + adj.saturation * 0.01;
+    var gamma = Math.max(0.1, adj.gamma);
+    var kR = 1 + adj.temperature * 0.0028 + Math.max(0, adj.tint) * 0.001;
+    var kG = 1 - adj.tint * 0.002;
+    var kB = 1 - adj.temperature * 0.0028 + Math.max(0, -adj.tint) * 0.001;
+    var black = clamp(adj.blackPoint / 100, 0, 0.95);
+    var white = Math.max(clamp(adj.whitePoint / 100, 0.05, 1), black + 0.02);
+    var flat = state.flat, flatK = state.flatStrength;
+    var useFlat = !!(flat && flatK > 0);
+    var ccm = state.ccmStrength > 0 ? state.ccm : null;
+    var ccmK = state.ccmStrength;
+    var ox = rect ? rect.x : 0, oy = rect ? rect.y : 0;
+    var ow = rect ? rect.w : w, oh = rect ? rect.h : h;
+    var out = new Uint16Array(ow * oh * 3);
+    var tmp = [0, 0, 0], rgb = [0, 0, 0];
+    for (var y = 0; y < oh; y++) {
+      for (var x = 0; x < ow; x++) {
+        var sx = x + ox, sy = y + oy;
+        var i = (sy * w + sx) * 4;
+        if (src[i + 3] === 0) continue;
+        var fu = sx / w, fv = sy / h;
+        for (var rc = 0; rc < 3; rc++) {
+          var rawc = useFlat ? flatCorrect8(src[i + rc], rc, fu, fv, flat, flatK) : src[i + rc];
+          rgb[rc] = positive
+            ? clamp(rawc / 255, 0, 1)
+            : conv ? conv(rc, rawc) : applyLevels(baseCorrect(rawc, base[rc]), levels[rc]);
+        }
+        if (ccm && conv) rgb = ccmApply(ccm, rgb, ccmK);
+        for (var c = 0; c < 3; c++) {
+          var v = clamp(rgb[c] * gains[c], 0, 1);
+          v = applyUserLevels(v, black, white);
+          v = Math.pow(v, 1 / gamma) * exposure * (c === 0 ? kR : c === 1 ? kG : kB);
+          rgb[c] = clamp(v, 0, 1);
+        }
+        applySaturation(rgb[0], rgb[1], rgb[2], sat, tmp);
+        applyContrast(tmp[0], tmp[1], tmp[2], adj.contrast, tmp);
+        var rv = linearToSrgb16(tmp[0]);
+        var gv = linearToSrgb16(tmp[1]);
+        var bv = linearToSrgb16(tmp[2]);
+        if (curveLuts) {
+          rv = curve16(curveLuts.rgb, curve16(curveLuts.r, rv));
+          gv = curve16(curveLuts.rgb, curve16(curveLuts.g, gv));
+          bv = curve16(curveLuts.rgb, curve16(curveLuts.b, bv));
+        }
+        var o = (y * ow + x) * 3;
+        out[o] = rv; out[o + 1] = gv; out[o + 2] = bv;
+      }
+    }
+    return out;
+  }
+
+  var CRC_TABLE = (function () {
+    var t = new Uint32Array(256);
+    for (var n = 0; n < 256; n++) {
+      var c = n;
+      for (var k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+      t[n] = c >>> 0;
+    }
+    return t;
+  })();
+
+  function crc32(bytes, start, end) {
+    var c = 0xffffffff;
+    for (var i = start; i < end; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  }
+
+  function pngChunk(type, data) {
+    var out = new Uint8Array(12 + data.length);
+    var dv = new DataView(out.buffer);
+    dv.setUint32(0, data.length);
+    for (var i = 0; i < 4; i++) out[4 + i] = type.charCodeAt(i);
+    out.set(data, 8);
+    dv.setUint32(8 + data.length, crc32(out, 4, 8 + data.length));
+    return out;
+  }
+
+  function deflateZlib(bytes) {
+    if (typeof CompressionStream === "undefined") {
+      return Promise.reject(new Error("当前浏览器不支持 16bit 压缩（需要 CompressionStream）"));
+    }
+    var stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream("deflate"));
+    return new Response(stream).arrayBuffer().then(function (buf) { return new Uint8Array(buf); });
+  }
+
+  // 16bit RGB PNG：IHDR 位深 16 / color type 2，行过滤固定 0，IDAT 用 zlib(deflate)
+  function encodePng16(rgb16, w, h) {
+    var raw = new Uint8Array(h * (1 + w * 6));
+    var p = 0;
+    for (var y = 0; y < h; y++) {
+      raw[p++] = 0;
+      var row = y * w * 3;
+      for (var x = 0; x < w; x++) {
+        var o = row + x * 3;
+        for (var c = 0; c < 3; c++) {
+          var val = rgb16[o + c];
+          raw[p++] = (val >> 8) & 0xff;
+          raw[p++] = val & 0xff;
+        }
+      }
+    }
+    return deflateZlib(raw).then(function (z) {
+      var ihdr = new Uint8Array(13);
+      var dv = new DataView(ihdr.buffer);
+      dv.setUint32(0, w);
+      dv.setUint32(4, h);
+      ihdr[8] = 16;  // bit depth
+      ihdr[9] = 2;   // truecolor RGB
+      var parts = [
+        new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]),
+        pngChunk("IHDR", ihdr),
+        pngChunk("IDAT", z),
+        pngChunk("IEND", new Uint8Array(0))
+      ];
+      var total = 0;
+      for (var i = 0; i < parts.length; i++) total += parts[i].length;
+      var out = new Uint8Array(total);
+      var off = 0;
+      for (var j = 0; j < parts.length; j++) { out.set(parts[j], off); off += parts[j].length; }
+      return out;
+    });
   }
 
   // ---------- 图片解码（含 TIFF 兜底） ----------
@@ -1557,7 +2060,18 @@
     toneIgnored: false,  // 用户忽略了正片提示
     positiveDiag: null,  // 正片判定的中间证据（score/ratio/edgeLum/edgeSat/vetoed）
     demaskMethod: "dual", // 去色罩方法：frame 逐张 / dual dmin+dmax 整卷 / curve 特性曲线整卷
-    demaskModel: null,    // 整卷锚点模型 {method, channels:[{dmax,dmid,nmid}]}
+    demaskModel: null,    // 整卷锚点模型 {method, channels:[{dmax,dmid,nmid,gain}]}
+    grayStrength: 0.35,   // 灰轴正则强度：0 关闭，1 完全对齐整卷中间调
+    flat: null,           // 平场参考模型 {w,h,gain:[Float32Array×3]}（线性增益，均值归一）
+    flatStrength: 1,      // 平场校正强度 0-1
+    ccm: null,            // 卷内色卡解算的 3×3 CCM {matrix}
+    ccmStrength: 1,       // CCM 强度 0-1
+    chartPicking: false,  // 是否处于色卡四角取点
+    chartQuad: [],        // 已点选的色卡四角（归一化画面坐标）
+    lensK: 0,             // 镜头径像畸变系数（<0 桶形校正，>0 枕形校正）
+    densityOn: false,     // 是否启用密度目标（黑白场密度锚点）
+    densityMin: 0,        // 黑场密度 Dmin
+    densityMax: 2.0,      // 白场密度 Dmax
     renderBuf: null,     // 预览渲染缓存（完整预览尺寸）
     curve: defaultCurve(),   // 曲线控制点 {rgb,r,g,b}
     curveChannel: "rgb",     // 当前编辑的曲线通道
@@ -1592,6 +2106,33 @@
     exportFormat: document.getElementById("export-format"),
     btnAutoBase: document.getElementById("btn-auto-base"),
     demaskMethod: document.getElementById("demask-method"),
+    grayStrength: document.getElementById("gray-strength"),
+    grayValue: document.getElementById("gray-value"),
+    flatTag: document.getElementById("flat-tag"),
+    flatStrength: document.getElementById("flat-strength"),
+    flatValue: document.getElementById("flat-value"),
+    btnFlat: document.getElementById("btn-flat"),
+    btnFlatClear: document.getElementById("btn-flat-clear"),
+    flatInput: document.getElementById("flat-input"),
+    flatNote: document.getElementById("flat-note"),
+    ccmTag: document.getElementById("ccm-tag"),
+    ccmStrength: document.getElementById("ccm-strength"),
+    ccmValue: document.getElementById("ccm-value"),
+    btnChart: document.getElementById("btn-chart"),
+    btnCcmClear: document.getElementById("btn-ccm-clear"),
+    ccmNote: document.getElementById("ccm-note"),
+    chartOverlay: document.getElementById("chart-overlay"),
+    lensK: document.getElementById("lens-k"),
+    lensValue: document.getElementById("lens-value"),
+    lensTag: document.getElementById("lens-tag"),
+    densityOn: document.getElementById("density-on"),
+    densityLabel: document.getElementById("density-label"),
+    densityMinRow: document.getElementById("density-min-row"),
+    densityMaxRow: document.getElementById("density-max-row"),
+    densityMin: document.getElementById("density-min"),
+    densityMax: document.getElementById("density-max"),
+    densityMinValue: document.getElementById("density-min-value"),
+    densityMaxValue: document.getElementById("density-max-value"),
     rollTag: document.getElementById("roll-tag"),
     rollNote: document.getElementById("roll-note"),
     btnManualBase: document.getElementById("btn-manual-base"),
@@ -1876,6 +2417,21 @@
           })
         };
       },
+      lens: function () { return state.lensK; },
+      density: function () {
+        return { on: state.densityOn, dmin: state.densityMin, dmax: state.densityMax };
+      },
+      ccm: function () {
+        return state.ccm ? { matrix: state.ccm.matrix, strength: state.ccmStrength } : null;
+      },
+      solveCcm: function (measured, targets) { return solveCcm(measured, targets); },
+      setCcm: function (matrix) {
+        state.ccm = matrix ? { matrix: matrix } : null;
+        scheduleRender();
+      },
+      flat: function () {
+        return state.flat ? { w: state.flat.w, h: state.flat.h, strength: state.flatStrength } : null;
+      },
       centerPixel: function () {
         var w = state.previewW, h = state.previewH;
         if (!state.previewData || !w || !h) return null;
@@ -2061,6 +2617,7 @@
     else canvasCtx.putImageData(imgData, 0, 0);
     fitCanvasDisplay();
     syncCompareBox();
+    syncChartOverlay();
     if (state.splitOn && el.compareDivider) applySplit();
   }
 
@@ -2080,7 +2637,7 @@
       r: new Uint32Array(256), g: new Uint32Array(256),
       b: new Uint32Array(256), luma: new Uint32Array(256),
     };
-    render(state.previewData.data, state.renderBuf.data, state.base, state.adj, state.analysis, buildCurveLuts(state.curve), hist);
+    render(state.previewData.data, state.renderBuf.data, state.base, state.adj, state.analysis, buildCurveLuts(state.curve), hist, state.previewW, state.previewH);
     state.curveHist = hist;
     blitPreview(state.renderBuf);
     drawCurve();
@@ -2269,7 +2826,10 @@
     state.rollPending = true;
     updateRollUI();
     var chain = Promise.resolve();
+    var used = 0;
     state.queue.forEach(function (item) {
+      if (item.excluded) return;
+      used += 1;
       chain = chain.then(function () {
         if (token !== rollToken) return null;
         return itemDensityHist(item).then(function (h) {
@@ -2280,10 +2840,18 @@
         });
       });
     });
+    if (!used) {
+      state.rollPending = false;
+      state.demaskModel = null;
+      reanalyzeCurrent();
+      return;
+    }
     chain.then(function () {
       if (token !== rollToken) return;
       state.rollPending = false;
-      state.demaskModel = buildDemaskModel(method, merged);
+      state.demaskModel = buildDemaskModel(method, merged, state.grayStrength, {
+      on: state.densityOn, dmin: state.densityMin, dmax: state.densityMax
+    });
       reanalyzeCurrent();
     });
   }
@@ -2302,13 +2870,18 @@
     if (state.demaskMethod === "frame") {
       tag = "逐张";
     } else {
-      tag = state.rollPending ? "整卷 · 分析中" : "整卷 · " + state.queue.length + " 帧";
+      var skipped = state.queue.filter(function (it) { return it.excluded; }).length;
+      tag = state.rollPending
+        ? "整卷 · 分析中"
+        : "整卷 · " + (state.queue.length - skipped) + " 帧" + (skipped ? "（排除 " + skipped + "）" : "");
     }
     el.rollTag.textContent = tag;
     if (el.rollNote) {
+      var skippedCount = state.queue.filter(function (it) { return it.excluded; }).length;
       el.rollNote.textContent = state.demaskMethod === "frame"
         ? "逐张模式只用当前帧估计锚点，缺少片基或密度范围时容易帧间不一致。"
-        : "整卷模型统计队列内 " + state.queue.length + " 帧的密度锚点，同卷各帧共用一套映射，优先使用。";
+        : "整卷模型统计队列内 " + (state.queue.length - skippedCount) + " 帧的密度锚点"
+          + (skippedCount ? "（已排除 " + skippedCount + " 帧）" : "") + "，同卷各帧共用一套映射。";
     }
   }
 
@@ -2431,6 +3004,15 @@
       if (b) b.disabled = true;
     });
     if (el.demaskMethod) el.demaskMethod.disabled = true;
+    if (el.grayStrength) el.grayStrength.disabled = true;
+    if (el.ccmStrength) el.ccmStrength.disabled = true;
+    if (el.btnChart) el.btnChart.disabled = true;
+    if (el.btnCcmClear) el.btnCcmClear.disabled = true;
+    if (el.densityOn) el.densityOn.disabled = true;
+    if (el.lensK) el.lensK.disabled = true;
+    if (el.chartOverlay) el.chartOverlay.hidden = true;
+    state.chartPicking = false;
+    state.chartQuad = [];
     if (el.exportFormat) el.exportFormat.disabled = true;
     state.demaskModel = null;
     updateRollUI();
@@ -2477,6 +3059,10 @@
       var ctx = cnv.getContext("2d");
       ctx.imageSmoothingQuality = "high";
       ctx.drawImage(bitmap, 0, 0, w, h);
+      if (state.lensK) {
+        var lensed = warpLensCanvas(cnv, state.lensK);
+        if (lensed && lensed !== cnv) { cnv = lensed; ctx = cnv.getContext("2d"); }
+      }
       var plain = ctx.getImageData(0, 0, w, h);
       // 未矫正原图缓存：手动矫正编辑态显示用
       state.plainData = plain;
@@ -2525,7 +3111,30 @@
         el.demaskMethod.disabled = false;
         el.demaskMethod.value = state.demaskMethod;
       }
+      if (el.grayStrength) {
+        el.grayStrength.disabled = false;
+        el.grayStrength.value = String(Math.round(state.grayStrength * 100));
+      }
       if (el.exportFormat) el.exportFormat.disabled = false;
+      if (el.btnChart) el.btnChart.disabled = false;
+      state.chartPicking = false;
+      state.chartQuad = [];
+      if (el.chartOverlay) el.chartOverlay.hidden = true;
+      if (el.canvas) el.canvas.classList.remove("is-sampling");
+      if (el.ccmStrength) el.ccmStrength.disabled = !state.ccm;
+      if (el.btnCcmClear) el.btnCcmClear.disabled = !state.ccm;
+      if (el.densityOn) el.densityOn.disabled = false;
+      if (el.lensK) {
+        el.lensK.disabled = false;
+        el.lensK.value = String(Math.round(state.lensK / 0.35 * 100));
+        if (el.lensValue) el.lensValue.textContent = String(Math.round(state.lensK / 0.35 * 100));
+      }
+      syncDensityUI();
+      if (state.ccm) {
+        if (el.ccmTag) el.ccmTag.textContent = "已标定";
+        if (el.ccmStrength) el.ccmStrength.value = String(Math.round(state.ccmStrength * 100));
+        if (el.ccmValue) el.ccmValue.textContent = Math.round(state.ccmStrength * 100) + "%";
+      }
       if (el.exportFormat) {
         var origOpt = el.exportFormat.querySelector('option[value="original"]');
         if (origOpt) origOpt.textContent = "原图格式（" + (item.ext ? item.ext.toUpperCase() : "未知") + "）";
@@ -2630,6 +3239,20 @@
         meta.textContent = metaLabel;
         card.appendChild(meta);
       }
+      var skip = document.createElement("button");
+      skip.type = "button";
+      skip.className = "qskip" + (item.excluded ? " is-on" : "");
+      skip.textContent = item.excluded ? "已排除" : "排除";
+      skip.title = item.excluded ? "点击纳入整卷分析" : "点击从整卷分析中排除";
+      skip.setAttribute("aria-pressed", item.excluded ? "true" : "false");
+      skip.addEventListener("click", function (e) {
+        e.stopPropagation();
+        item.excluded = !item.excluded;
+        renderQueue();
+        rebuildRollModel();
+      });
+      card.appendChild(skip);
+
       var del = document.createElement("button");
       del.type = "button";
       del.className = "qdel";
@@ -2693,6 +3316,10 @@
   });
 
   el.canvas.addEventListener("click", function (e) {
+    if (state.chartPicking && state.previewData) {
+      onChartClick(e);
+      return;
+    }
     if (!state.isSampling || !state.previewData) return;
     var rect = el.canvas.getBoundingClientRect();
     var x = Math.round((e.clientX - rect.left) / rect.width * state.previewW);
@@ -2720,6 +3347,151 @@
     }
     scheduleRollRebuild();
   }
+
+  if (el.grayStrength) el.grayStrength.addEventListener("input", function () {
+    state.grayStrength = clamp(parseFloat(el.grayStrength.value) / 100, 0, 1);
+    if (el.grayValue) el.grayValue.textContent = Math.round(state.grayStrength * 100) + "%";
+    rebuildRollModel();
+  });
+
+  // ---- 平场参考 ----
+  if (el.btnFlat) el.btnFlat.addEventListener("click", function () {
+    if (el.flatInput) el.flatInput.click();
+  });
+  if (el.flatInput) el.flatInput.addEventListener("change", function () {
+    var f = el.flatInput.files && el.flatInput.files[0];
+    el.flatInput.value = "";
+    if (!f) return;
+    setStatus("正在解析平场参考…");
+    decodeFile(f).then(function (bmp) {
+      var s = Math.min(1, FLAT_MAX / Math.max(bmp.width, bmp.height));
+      var w = Math.max(1, Math.round(bmp.width * s));
+      var h = Math.max(1, Math.round(bmp.height * s));
+      var cnv = document.createElement("canvas");
+      cnv.width = w; cnv.height = h;
+      var ctx = cnv.getContext("2d", { willReadFrequently: true });
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(bmp, 0, 0, w, h);
+      if (bmp.close) bmp.close();
+      state.flat = buildFlatModel(ctx.getImageData(0, 0, w, h).data, w, h);
+      if (el.flatStrength) {
+        el.flatStrength.disabled = false;
+        el.flatStrength.value = String(Math.round(state.flatStrength * 100));
+      }
+      if (el.flatValue) el.flatValue.textContent = Math.round(state.flatStrength * 100) + "%";
+      if (el.btnFlatClear) el.btnFlatClear.disabled = false;
+      if (el.flatTag) el.flatTag.textContent = "参考 " + w + "×" + h;
+      if (el.flatNote) el.flatNote.textContent = "平场参考已载入：" + f.name + "。强度 100% 时完全按参考校正，0% 关闭。";
+      setStatus("平场参考已载入：" + f.name);
+      scheduleRender();
+    }).catch(function (err) {
+      console.error(err);
+      setStatus("平场参考解析失败：" + (err && err.message ? err.message : "不支持的格式"));
+    });
+  });
+  if (el.flatStrength) el.flatStrength.addEventListener("input", function () {
+    state.flatStrength = clamp(parseFloat(el.flatStrength.value) / 100, 0, 1);
+    if (el.flatValue) el.flatValue.textContent = Math.round(state.flatStrength * 100) + "%";
+    scheduleRender();
+  });
+  if (el.btnFlatClear) el.btnFlatClear.addEventListener("click", function () {
+    state.flat = null;
+    if (el.flatStrength) el.flatStrength.disabled = true;
+    if (el.btnFlatClear) el.btnFlatClear.disabled = true;
+    if (el.flatTag) el.flatTag.textContent = "未载入";
+    if (el.flatNote) el.flatNote.textContent = "用一张均匀曝光的空片参考，压掉灯箱与镜头造成的亮度不均和暗角。平场只作用于成片映射，不参与整卷锚点统计。";
+    setStatus("已清除平场参考");
+    scheduleRender();
+  });
+
+  // ---- 色卡 / CCM ----
+  if (el.btnChart) el.btnChart.addEventListener("click", function () {
+    if (!state.previewData) {
+      setStatus("请先载入图片");
+      return;
+    }
+    if (!state.demaskModel) {
+      setStatus("色卡 CCM 需要整卷模型：请把去色罩方法设为 dmin+dmax 或特性曲线");
+      return;
+    }
+    setSampling(false);
+    state.chartPicking = true;
+    state.chartQuad = [];
+    if (el.chartOverlay) el.chartOverlay.hidden = false;
+    if (el.canvas) el.canvas.classList.add("is-sampling");
+    syncChartOverlay();
+    setStatus("请依次点选色卡四角：左上 → 右上 → 右下 → 左下");
+  });
+  if (el.ccmStrength) el.ccmStrength.addEventListener("input", function () {
+    state.ccmStrength = clamp(parseFloat(el.ccmStrength.value) / 100, 0, 1);
+    if (el.ccmValue) el.ccmValue.textContent = Math.round(state.ccmStrength * 100) + "%";
+    scheduleRender();
+  });
+  if (el.btnCcmClear) el.btnCcmClear.addEventListener("click", function () {
+    state.ccm = null;
+    state.chartQuad = [];
+    if (el.chartOverlay) el.chartOverlay.hidden = true;
+    if (el.ccmStrength) el.ccmStrength.disabled = true;
+    if (el.btnCcmClear) el.btnCcmClear.disabled = true;
+    if (el.ccmTag) el.ccmTag.textContent = "未标定";
+    if (el.ccmNote) el.ccmNote.textContent = "点「框选色卡」后依次点选色卡四角（左上→右上→右下→左下），按 ColorChecker Classic 24 色布局解算 3×3 CCM。需整卷去色罩模型。";
+    setStatus("已清除色卡 CCM");
+    scheduleRender();
+  });
+
+  // ---- 密度目标（黑白场密度锚点）----
+  function syncDensityUI() {
+    if (el.densityOn) el.densityOn.checked = !!state.densityOn;
+    if (el.densityMinRow) el.densityMinRow.hidden = !state.densityOn;
+    if (el.densityMaxRow) el.densityMaxRow.hidden = !state.densityOn;
+    if (el.densityLabel) {
+      el.densityLabel.textContent = state.densityOn
+        ? "Dmin " + state.densityMin.toFixed(2) + " / Dmax " + state.densityMax.toFixed(2)
+        : "关闭";
+    }
+    if (el.densityMin) el.densityMin.value = String(Math.round(state.densityMin * 100));
+    if (el.densityMax) el.densityMax.value = String(Math.round(state.densityMax * 100));
+    if (el.densityMinValue) el.densityMinValue.textContent = state.densityMin.toFixed(2);
+    if (el.densityMaxValue) el.densityMaxValue.textContent = state.densityMax.toFixed(2);
+  }
+  if (el.densityOn) el.densityOn.addEventListener("change", function () {
+    state.densityOn = !!el.densityOn.checked;
+    syncDensityUI();
+    rebuildRollModel();
+  });
+  if (el.densityMin) el.densityMin.addEventListener("input", function () {
+    state.densityMin = clamp((parseFloat(el.densityMin.value) || 0) / 100, 0, state.densityMax - 0.3);
+    syncDensityUI();
+    rebuildRollModel();
+  });
+  if (el.densityMax) el.densityMax.addEventListener("input", function () {
+    state.densityMax = clamp((parseFloat(el.densityMax.value) || 200) / 100, state.densityMin + 0.3, 4);
+    syncDensityUI();
+    rebuildRollModel();
+  });
+
+  // ---- 镜头校正 ----
+  var lensTimer = null;
+  if (el.lensK) el.lensK.addEventListener("input", function () {
+    var raw = parseInt(el.lensK.value, 10) || 0;
+    state.lensK = clamp(raw / 100, -1, 1) * 0.35;
+    if (el.lensValue) el.lensValue.textContent = String(raw);
+    if (el.lensTag) el.lensTag.textContent = raw === 0 ? "关闭" : (raw < 0 ? "桶形 " + Math.abs(raw) + "%" : "枕形 " + raw + "%");
+    if (lensTimer) clearTimeout(lensTimer);
+    lensTimer = setTimeout(function () {
+      var item = currentItem();
+      if (!item || !state.bitmap) return;
+      // 几何改变后旧的透视/裁剪坐标不再有效，清空后重算
+      item.perspective = null;
+      item.crop = null;
+      state.crop = null;
+      state.cropEditing = false;
+      if (el.cropBar) el.cropBar.hidden = true;
+      if (el.cropOverlay) el.cropOverlay.hidden = true;
+      setupEditorFromBitmap(state.bitmap, item);
+      setStatus("镜头校正已应用（径像 " + raw + "）");
+    }, 160);
+  });
 
   if (el.demaskMethod) el.demaskMethod.addEventListener("change", function () {
     state.demaskMethod = el.demaskMethod.value;
@@ -3188,7 +3960,17 @@
       base: { rgb: state.base.slice(), source: state.baseSource, confidence: state.baseConfidence, samples: state.baseSamples },
       positive: { positive: state.positive, detectedPositive: state.detectedPositive, toneIgnored: state.toneIgnored, evidence: state.positiveDiag },
       analysis: state.analysis,
-      demask: { method: state.demaskMethod, model: state.demaskModel, frames: state.queue.length },
+      demask: {
+        method: state.demaskMethod,
+        model: state.demaskModel,
+        gray: state.grayStrength,
+        frames: state.queue.length,
+        excluded: state.queue.filter(function (it) { return it.excluded; }).map(function (it) { return it.name; })
+      },
+      ccm: state.ccm ? { matrix: state.ccm.matrix, strength: state.ccmStrength } : null,
+      lens: { k: state.lensK },
+      density: { on: state.densityOn, dmin: state.densityMin, dmax: state.densityMax },
+      flat: state.flat ? { w: state.flat.w, h: state.flat.h, strength: state.flatStrength } : null,
       perspective: state.perspective,
       crop: state.crop,
       queue: { length: state.queue.length }
@@ -3218,6 +4000,10 @@
         var ctx = cnv.getContext("2d");
         ctx.imageSmoothingQuality = "high";
         ctx.drawImage(state.bitmap, 0, 0, w, h);
+        if (state.lensK) {
+          var lensImg = warpLensCanvas(cnv, state.lensK);
+          if (lensImg && lensImg !== cnv) { cnv = lensImg; w = cnv.width; h = cnv.height; }
+        }
         // 透视拉正（与预览共用同一 quad，裁剪在矫正之后进行）
         var persp = state.perspective;
         if (persp && persp.quad && persp.on) {
@@ -3226,8 +4012,21 @@
         }
         var ectx = cnv.getContext("2d");
         var src = ectx.getImageData(0, 0, w, h);
+        if (resolved.kind === "png16") {
+          var rect16 = cropRectPx(state.crop, w, h);
+          var rgb16 = render16(src.data, w, h, rect16, state.base, state.adj, state.analysis, buildCurveLuts(state.curve));
+          var ow16 = rect16 ? rect16.w : w, oh16 = rect16 ? rect16.h : h;
+          encodePng16(rgb16, ow16, oh16).then(function (png) {
+            return deliverExport(new Blob([png], { type: "image/png" }), "png", "PNG 16bit", "（16bit）", ow16, oh16);
+          }).catch(function (err) {
+            console.error(err);
+            setStatus("16bit 导出失败：" + (err && err.message ? err.message : "未知错误"));
+            el.btnExport.disabled = false;
+          });
+          return;
+        }
         var out = ectx.createImageData(w, h);
-        render(src.data, out.data, state.base, state.adj, state.analysis, buildCurveLuts(state.curve));
+        render(src.data, out.data, state.base, state.adj, state.analysis, buildCurveLuts(state.curve), null, w, h);
         ectx.putImageData(out, 0, 0);
 
         var outCanvas = cnv;
@@ -3347,6 +4146,10 @@
         var ctx = cnv.getContext("2d");
         ctx.imageSmoothingQuality = "high";
         ctx.drawImage(state.bitmap, 0, 0, w, h);
+        if (state.lensK) {
+          var lensImg = warpLensCanvas(cnv, state.lensK);
+          if (lensImg && lensImg !== cnv) { cnv = lensImg; w = cnv.width; h = cnv.height; }
+        }
         // 透视拉正（与预览/导出共用同一 quad）
         var persp = state.perspective;
         if (persp && persp.quad && persp.on) {
@@ -3357,7 +4160,7 @@
         var src = lctx.getImageData(0, 0, w, h);
         var analysis = state.positive ? analyzePositive() : analyze(src.data, state.base);
         var out = lctx.createImageData(w, h);
-        render(src.data, out.data, state.base, state.adj, analysis, buildCurveLuts(state.curve));
+        render(src.data, out.data, state.base, state.adj, analysis, buildCurveLuts(state.curve), null, w, h);
         lctx.putImageData(out, 0, 0);
         var shown = cnv;
         var rect = cropRectPx(state.crop, w, h);
@@ -3677,6 +4480,10 @@
       var ctx = cnv.getContext("2d");
       ctx.imageSmoothingQuality = "high";
       ctx.drawImage(bmp, 0, 0, w, h);
+      if (state.lensK) {
+        var lensImg = warpLensCanvas(cnv, state.lensK);
+        if (lensImg && lensImg !== cnv) { cnv = lensImg; w = cnv.width; h = cnv.height; }
+      }
       // 透视拉正（与预览共用同一 quad，裁剪在矫正之后进行）
       var persp = item.perspective;
       if (persp && persp.quad && persp.on) {
@@ -3685,8 +4492,17 @@
       }
       var ectx = cnv.getContext("2d");
       var src = ectx.getImageData(0, 0, w, h);
+      if (choice === "png16") {
+        var rect16 = cropRectPx(item.crop, w, h);
+        var rgb16 = render16(src.data, w, h, rect16, base, adj, analysis, buildCurveLuts(item.curve));
+        if (bmp.close) bmp.close();
+        var ow16 = rect16 ? rect16.w : w, oh16 = rect16 ? rect16.h : h;
+        return encodePng16(rgb16, ow16, oh16).then(function (png) {
+          return { blob: new Blob([png], { type: "image/png" }), filename: baseName(item.name) + "-converted.png" };
+        });
+      }
       var out = ectx.createImageData(w, h);
-      render(src.data, out.data, base, adj, analysis, buildCurveLuts(item.curve));
+      render(src.data, out.data, base, adj, analysis, buildCurveLuts(item.curve), null, w, h);
       ectx.putImageData(out, 0, 0);
       if (bmp.close) bmp.close();
       var outCanvas = cnv;
@@ -3726,6 +4542,7 @@
 
   function batchFormatLabel(fmt) {
     if (fmt === "original") return "原图格式";
+    if (fmt === "png16") return "PNG 16bit";
     if (fmt === "tiff") return "TIFF";
     return EXPORT_SPECS[fmt] ? EXPORT_SPECS[fmt].label : "JPEG";
   }
