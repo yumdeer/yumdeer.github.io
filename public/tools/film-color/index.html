@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="胶片滤镜：用 DigitalFilm / SpektraLab 的 24 款胶卷与 9 款相纸，在本地浏览器里为照片冲印胶片效果；支持多图批量、双重曝光、曝光补偿与强度混合。">
+  <title>胶片滤镜 - flowerdeer 小工具</title>
+  <link rel="icon" type="image/png" href="/favicon.png?v=2">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2">
+  <link rel="stylesheet" href="styles.css?v=1.0.0">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/tools/" aria-label="返回小工具列表">← 小工具</a>
+    <span class="title">胶片滤镜</span>
+    <span class="spacer"></span>
+    <span class="privacy">本地处理 · 不上传</span>
+  </header>
+
+  <main class="layout">
+    <aside class="panel">
+      <div class="card">
+        <div class="segmented" role="tablist">
+          <button type="button" class="seg is-active" data-mode="single" role="tab" aria-selected="true">单张</button>
+          <button type="button" class="seg" data-mode="double" role="tab" aria-selected="false">双重曝光</button>
+        </div>
+
+        <div id="pane-single">
+          <div class="exposure">
+            <div class="exposure-head">
+              <span class="slot-name">照片</span>
+              <button type="button" class="text-btn" data-pick="single">选择照片</button>
+            </div>
+            <div class="exposure-body">
+              <button type="button" class="thumb" data-pick="single" aria-label="选择照片">
+                <span class="thumb-plus">＋</span>
+                <img alt="" hidden>
+              </button>
+              <div class="exposure-meta">
+                <p class="exposure-file" id="single-name">未选择</p>
+                <p class="card-note">可一次多选，列表按同一组胶片与曝光冲印。</p>
+              </div>
+            </div>
+          </div>
+          <div class="batch-list" id="batch-list" hidden></div>
+          <div class="batch-foot">
+            <span class="batch-count" id="batch-count">未选择</span>
+            <button type="button" class="ghost-btn" id="batch-clear" disabled>清空列表</button>
+          </div>
+        </div>
+
+        <div id="pane-double" hidden>
+          <div class="exposure">
+            <div class="exposure-head">
+              <span class="slot-name">下层</span>
+              <button type="button" class="text-btn" data-pick="lower">选择照片</button>
+            </div>
+            <div class="exposure-body">
+              <button type="button" class="thumb" data-pick="lower" aria-label="选择下层照片">
+                <span class="thumb-plus">＋</span>
+                <img alt="" hidden>
+              </button>
+              <div class="exposure-meta">
+                <p class="exposure-file" id="lower-name">未选择</p>
+              </div>
+            </div>
+          </div>
+          <div class="exposure">
+            <div class="exposure-head">
+              <span class="slot-name">上层</span>
+              <button type="button" class="text-btn" data-pick="upper">选择照片</button>
+            </div>
+            <div class="exposure-body">
+              <button type="button" class="thumb" data-pick="upper" aria-label="选择上层照片">
+                <span class="thumb-plus">＋</span>
+                <img alt="" hidden>
+              </button>
+              <div class="exposure-meta">
+                <p class="exposure-file" id="upper-name">未选择</p>
+              </div>
+            </div>
+          </div>
+          <button type="button" class="ghost-btn wide" id="swap" disabled>交换上下层</button>
+        </div>
+      </div>
+
+      <div class="card" id="look-card">
+        <div class="card-head">
+          <h2>胶片与相纸</h2>
+          <span class="tag" id="film-type">负片</span>
+        </div>
+        <label class="field" for="film">胶卷
+          <select id="film"></select>
+        </label>
+        <label class="field" for="paper">相纸
+          <select id="paper"></select>
+        </label>
+        <p class="card-note">切换胶卷时会自动换成它的推荐相纸。</p>
+      </div>
+
+      <div class="card" id="exposure-card">
+        <div class="card-head">
+          <h2>曝光与强度</h2>
+          <span class="tag" id="ev-tag">自动</span>
+        </div>
+        <label class="check"><input type="checkbox" id="auto" checked>自动曝光</label>
+        <label class="field" for="ev">曝光补偿 <span class="value" id="ev-val">0.0 EV</span></label>
+        <input type="range" id="ev" min="-3" max="3" step="0.1" value="0" disabled>
+        <label class="field" for="strength">强度 <span class="value" id="strength-val">100%</span></label>
+        <input type="range" id="strength" min="0" max="100" step="1" value="100">
+      </div>
+
+      <div class="card" id="double-controls" hidden>
+        <div class="card-head">
+          <h2>双重曝光</h2>
+          <span class="tag" id="balance-tag">50% 上层</span>
+        </div>
+        <input type="range" id="balance" min="10" max="90" step="1" value="50">
+        <p class="card-note">上层所占的光量，总光量保持不变。</p>
+        <label class="field" for="scale">上层缩放 <span class="value" id="scale-val">1.00×</span></label>
+        <input type="range" id="scale" min="1" max="4" step="0.01" value="1" disabled>
+        <div class="btn-row">
+          <button type="button" class="ghost-btn" id="rotate" disabled>旋转 90°</button>
+          <button type="button" class="ghost-btn" id="flip" disabled>水平翻转</button>
+          <button type="button" class="ghost-btn" id="reset" disabled>还原</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>导出</h2>
+        </div>
+        <label class="field" for="format">格式
+          <select id="format">
+            <option value="original" selected>跟随原图（各自格式）</option>
+            <option value="image/jpeg">JPEG</option>
+            <option value="image/png">PNG</option>
+            <option value="image/webp">WEBP</option>
+            <option value="image/bmp">BMP</option>
+            <option value="image/tiff">TIFF</option>
+          </select>
+        </label>
+        <button type="button" class="primary-btn wide" id="export" disabled>导出</button>
+        <button type="button" class="ghost-btn wide" id="export-all" hidden title="选择保存文件夹后，按当前胶片、曝光与强度批量冲印队列内所有照片；浏览器不支持时改为逐张下载">批量导出</button>
+        <p class="card-note" id="export-note">载入照片后可导出。</p>
+        <p class="credit">胶片与相纸数据来自 SpektraLab / spektrafilm（Andrea Volpato，CC BY-SA 4.0），本页在浏览器本地完成冲印计算。</p>
+      </div>
+    </aside>
+
+    <section class="stage">
+      <div class="stage-bar">
+        <span class="stage-actions">
+          <button type="button" class="ghost-btn" id="compare" disabled>按住看原图</button>
+          <button type="button" class="ghost-btn" id="split" disabled>分屏对比</button>
+          <button type="button" class="ghost-btn" id="reset-all" disabled>重置</button>
+        </span>
+      </div>
+      <div class="viewport" id="viewport">
+        <div class="drop-empty" id="empty">
+          <p class="drop-main">选择照片，套用 DigitalFilm 胶片</p>
+          <p class="drop-sub">24 款胶卷 · 9 款相纸 · 可多选批量 · 双重曝光</p>
+        </div>
+        <div class="canvas-wrap" id="canvas-wrap" hidden>
+          <canvas id="view-canvas" class="view-canvas"></canvas>
+          <div class="split-line" id="split-line" hidden><span class="split-handle"></span></div>
+        </div>
+        <div class="status" id="status" hidden></div>
+      </div>
+      <p class="stage-note" id="stage-note">选择一张照片开始。</p>
+    </section>
+  </main>
+
+  <input type="file" id="file-input" accept="image/jpeg,image/png,image/webp,image/bmp,image/avif,image/tiff,.jpg,.jpeg,.png,.webp,.bmp,.avif,.tif,.tiff" hidden>
+  <script src="lib/UTIF.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
