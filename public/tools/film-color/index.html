@@ -140,6 +140,13 @@
             <option value="image/tiff">TIFF</option>
           </select>
         </label>
+        <label class="field" for="frame">边框
+          <select id="frame">
+            <option value="none" selected>无</option>
+            <option value="white">白边</option>
+            <option value="film">胶片框</option>
+          </select>
+        </label>
         <button type="button" class="primary-btn wide" id="export" disabled>导出</button>
         <button type="button" class="ghost-btn wide" id="export-all" hidden title="选择保存文件夹后，按当前胶片、曝光与强度批量冲印队列内所有照片；浏览器不支持时改为逐张下载">批量导出</button>
         <p class="card-note" id="export-note">载入照片后可导出。</p>

@@ -44,6 +44,7 @@ const el = {
   strengthVal: document.getElementById("strength-val"),
   doubleControls: document.getElementById("double-controls"),
   lookCard: document.getElementById("look-card"),
+  frame: document.getElementById("frame"),
   exposureCard: document.getElementById("exposure-card"),
   balance: document.getElementById("balance"),
   balanceTag: document.getElementById("balance-tag"),
@@ -94,6 +95,7 @@ const state = {
   autoDirty: true,
   renderSeq: 0,
   pick: null,
+  frame: "none",
   split: false,
   splitRatio: 0.5,
   compareHold: false,
@@ -440,6 +442,8 @@ async function loadFilm(id) {
   const res = await fetch(dataUrl(`./data/films/${id}.bin`));
   if (!res.ok) throw new Error(`胶卷数据加载失败: ${id}`);
   const film = parseFilm(await res.arrayBuffer());
+  const meta = state.manifest && state.manifest.films.find((f) => f.id === id);
+  film.positive = !!meta && meta.type === "positive";
   film.id = id;
   filmCache.set(id, film);
   return film;
@@ -456,7 +460,12 @@ async function loadPaper(id) {
 }
 
 async function ensureLut(ev) {
-  const key = `${state.filmId}|${state.paperId}|${ev.toFixed(2)}`;
+  const filmMeta = state.manifest.films.find((f) => f.id === state.filmId);
+  const positive = !!filmMeta && filmMeta.type === "positive";
+  // 反转片直接扫描，不使用相纸；LUT 缓存键也不带相纸，避免换相纸时误命中。
+  const key = positive
+    ? `${state.filmId}|direct|${ev.toFixed(2)}`
+    : `${state.filmId}|${state.paperId}|${ev.toFixed(2)}`;
   if (state.lut && state.lutKey === key) return state.lut;
   if (lutCache.has(key)) {
     state.lut = lutCache.get(key);
@@ -464,7 +473,9 @@ async function ensureLut(ev) {
     return state.lut;
   }
   setStatus("烘焙胶片…");
-  const [film, paper] = await Promise.all([loadFilm(state.filmId), loadPaper(state.paperId)]);
+  const [film, paper] = positive
+    ? [await loadFilm(state.filmId), null]
+    : await Promise.all([loadFilm(state.filmId), loadPaper(state.paperId)]);
   await tick();
   const lut = bakeLut(film, paper, ev, LUT_SIDE);
   if (lutCache.size > 10) lutCache.delete(lutCache.keys().next().value);
@@ -538,42 +549,430 @@ function present(out, src) {
   el.empty.hidden = true;
   el.canvasWrap.hidden = false;
   setStatus(null);
-  const f = src.frame;
-  el.exportNote.textContent = `输出 ${f.w} × ${f.h}`;
+  const spec = frameSpec(src.w, src.h, state.frame);
+  el.exportNote.textContent = `输出 ${spec.w} × ${spec.h}`;
 }
 
 const procLayer = document.createElement("canvas");
+const photoLayer = document.createElement("canvas");
 
-/** 重绘预览；分屏对比时左半原图、右半冲印结果。 */
+// 135 胶片实测几何（mm）：胶片宽 35，片门 36.25 × 24.3，齿距 4.75，
+// 齿孔 2.79 × 1.98，孔外缘距片边 2.0，片边字在孔的外侧，片门四角 0.5 圆角。
+const FRAME_MM = {
+  rebate: 5.35,
+  side: 0.875,
+  pitch: 4.75,
+  perfW: 2.79,
+  perfH: 1.98,
+  perfInset: 2,
+  gateRadius: 0.5,
+};
+
+/** 边框尺寸：白边按短边 5.5% 留白；胶片框按 135 片基比例留出上下片边。 */
+function frameSpec(w, h, style) {
+  if (style === "white") {
+    const pad = Math.max(6, Math.round(Math.min(w, h) * 0.055));
+    return { style, w: w + pad * 2, h: h + pad * 2, padX: pad, padY: pad, strip: 0, scale: 0 };
+  }
+  if (style === "film") {
+    const scale = h / 24.3;
+    const padX = Math.max(5, Math.round(FRAME_MM.side * scale));
+    const strip = Math.max(16, Math.round(FRAME_MM.rebate * scale));
+    return { style, w: w + padX * 2, h: h + strip * 2, padX, padY: strip, strip, scale };
+  }
+  return { style: "none", w, h, padX: 0, padY: 0, strip: 0, scale: 0 };
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+/** 齿孔：8 齿一格，齿孔在片边字与片门之间。 */
+function drawSprockets(ctx, spec) {
+  const scale = spec.scale;
+  const holeW = Math.max(6, Math.round(FRAME_MM.perfW * scale));
+  const holeH = Math.max(5, Math.round(FRAME_MM.perfH * scale));
+  const pitch = Math.max(holeW + 4, Math.round(FRAME_MM.pitch * scale));
+  const radius = Math.max(1, Math.round(0.4 * scale));
+  const count = Math.max(1, Math.round(spec.w / pitch));
+  const pattern = (count - 1) * pitch + holeW;
+  const offset = Math.round((spec.w - pattern) / 2);
+  const top = Math.max(2, Math.round(FRAME_MM.perfInset * scale));
+  const bottom = spec.h - top - holeH;
+  ctx.fillStyle = "#f1eee6";
+  for (let i = 0; i < count; i += 1) {
+    const x = offset + i * pitch;
+    roundRect(ctx, x, top, holeW, holeH, radius);
+    ctx.fill();
+    roundRect(ctx, x, bottom, holeW, holeH, radius);
+    ctx.fill();
+  }
+}
+
+// 片边字取自 app 的实测值（Session+FilmEdge.swift → edgeText(for:gauge:)）。
+// 本工具只画 135 片条，因此用 135 的写法；120 的边字不同（如 Gold 200 是
+// "KODAK 200"、Velvia 是 "FUJI RVP100"、Portra 800 是 "KODAK PORTRA 800"），不能混用。
+const EDGE_TEXT = {
+  kodak_gold_200: "KODAK GB 200-7",
+  kodak_portra_800: "KODAK PORTRA 800-3",
+  kodak_portra_800_push1: "KODAK PORTRA 800-3",
+  kodak_portra_800_push2: "KODAK PORTRA 800-3",
+  kodak_ultramax_400: "KODAK GC 400",
+  kodak_ektachrome_100: "KODAK E100",
+  fujifilm_c200: "FUJI 200",
+  fujifilm_xtra_400: "S-400",
+  fujifilm_pro_400h: "PRO400H",
+  fujifilm_provia_100f: "FUJI RDPIII",
+  fujifilm_velvia_100: "RVP100",
+  kodak_vision3_50d: "EASTMAN 5203",
+  kodak_vision3_250d: "EASTMAN 5207",
+  kodak_vision3_200t: "EASTMAN 5213",
+  kodak_vision3_500t: "EASTMAN 5219",
+  cinestill_800t: "CINESTILL 800T",
+  kodak_tri_x_400: "KODAK 400TX",
+  kodak_tmax_100: "KODAK 100TMX",
+  fujifilm_neopan_acros_100_ii: "FUJI 100 ACROS II",
+  ilford_hp5_plus_400: "ILFORD HP5 PLUS",
+};
+
+// DX 编码：Kodak 版式（含 E100）有 DX 条码；富士反转片点阵版式没有
+const DX_CODE = {
+  kodak_gold_200: 1207,
+  kodak_portra_160: 1221,
+  kodak_portra_400: 1277,
+  kodak_portra_800: 1273,
+  kodak_portra_800_push1: 1273,
+  kodak_portra_800_push2: 1273,
+  kodak_ultramax_400: 1263,
+  kodak_ektar_100: 1241,
+  kodak_ektachrome_100: 382,
+  fujifilm_c200: 1847,
+  fujifilm_xtra_400: 1807,
+  fujifilm_pro_400h: 1877,
+  cinestill_800t: 2783,
+  kodak_tri_x_400: 1107,
+  kodak_tmax_100: 1101,
+  ilford_hp5_plus_400: 1707,
+  fujifilm_neopan_acros_100_ii: 1907,
+};
+
+function currentFilm() {
+  return state.manifest && state.manifest.films.find((f) => f.id === state.filmId);
+}
+
+/** 反转片（正片）：中性黑片基，片边墨色随胶卷不同。 */
+function isPositiveFilm() {
+  const film = currentFilm();
+  return !!film && film.type === "positive";
+}
+
+/**
+ * 135 片边版式。app 的 overscan.cpp 按胶卷分版式：
+ * 富士反转片（RVP/RDPIII）是自家点阵版式，格号在片门左端、上下两条边各一个；
+ * 柯达系（含 E100、Kodachrome）用 Kodak 版式。
+ */
+function filmEdgeLayout() {
+  return state.filmId === "fujifilm_velvia_100" || state.filmId === "fujifilm_provia_100f"
+    ? "fujiSlide"
+    : "kodak";
+}
+
+// 片边墨色：取自 app 对真实底片的实测值（RVP (1,.89,.41)、RDPIII (1,.80,.32)、
+// E100 (1,.95,.92)）；其余沿用 Kodak 负片的棕橙色。
+const EDGE_INK = {
+  fujifilm_velvia_100: "#ffe369",
+  fujifilm_provia_100f: "#ffcc52",
+  kodak_ektachrome_100: "#fff2eb",
+};
+function edgeInkColor() {
+  return EDGE_INK[state.filmId] || "#e2a24a";
+}
+
+/** 当前胶卷的片边字：优先用实测边码，其余按胶卷名去掉括号后缀。 */
+function currentEdgeText() {
+  const film = currentFilm();
+  if (!film) return "DIGITAL FILM";
+  if (EDGE_TEXT[film.id]) return EDGE_TEXT[film.id];
+  return film.name.replace(/\s*\(.*$/, "").trim().toUpperCase();
+}
+
+/** 31 模块 DX 码：时钟轨 + 数据轨，数据位编码胶卷号与格号。 */
+function dxBits(dx, frame, half) {
+  const bits = new Array(23).fill(0);
+  const part1 = (dx >> 4) & 0x7f;
+  const part2 = dx & 0xf;
+  for (let i = 1; i <= 7; i += 1) bits[i] = (part1 >> (7 - i)) & 1;
+  for (let i = 0; i < 4; i += 1) bits[9 + i] = (part2 >> (3 - i)) & 1;
+  const num = (frame + (half ? 1 : 0)) & 0x3f;
+  for (let i = 0; i < 6; i += 1) bits[13 + i] = (num >> (5 - i)) & 1;
+  return bits;
+}
+
+/** 按像素画一段 DX 条码，sMm 为起始位置（相对片门左缘）。 */
+function drawDxCode(ctx, spec, sMm, frame, half) {
+  if (filmEdgeLayout() === "fujiSlide") return;
+  const dx = DX_CODE[state.filmId];
+  if (dx === undefined) return;
+  const scale = spec.scale;
+  const mod = (12.7 / 31) * scale;
+  const x0 = spec.padX + sMm * scale;
+  const bits = dxBits(dx, frame, half);
+  const clock = [];
+  const data = [];
+  for (let i = 0; i < 31; i += 1) {
+    clock.push(i < 5 || i >= 28 ? 1 : (i - 5) % 2);
+    if (i < 5) data.push(i % 2 === 0 ? 1 : 0);
+    else if (i >= 28) data.push((i - 28) % 2 === 0 ? 1 : 0);
+    else data.push(bits[i - 5]);
+  }
+  const track = (pattern, y0, y1) => {
+    for (let i = 0; i < 31; i += 1) {
+      if (!pattern[i]) continue;
+      let j = i;
+      while (j + 1 < 31 && pattern[j + 1]) j += 1;
+      ctx.fillRect(x0 + i * mod, y0, (j - i + 1) * mod, y1 - y0);
+      i = j;
+    }
+  };
+  ctx.fillStyle = edgeInkColor();
+  // 真实 135 片边：条码总高约 2.17mm，比齿孔（1.98mm）更高，
+  // 顶端伸到齿孔下缘之上，齿孔之间的间隙里能看到条码上沿。
+  // 时钟轨在上、数据轨在下，齿孔最后绘制会裁掉压进孔位的部分。
+  track(clock, spec.h - 2.17 * scale, spec.h - 0.87 * scale);
+  track(data, spec.h - 0.87 * scale, spec.h);
+}
+
+/** 片边数字：app 用横向拉伸 1.25 的粗体。 */
+function drawEdgeNumber(ctx, text, x, y, size, align, color, wide = true) {
+  ctx.save();
+  ctx.translate(x, y);
+  if (wide) ctx.scale(1.25, 1);
+  ctx.font = `700 ${Math.max(5, Math.round(size))}px Helvetica, Arial, sans-serif`;
+  ctx.fillStyle = color;
+  ctx.textAlign = align;
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText(text, 0, 0);
+  ctx.restore();
+}
+
+/** 把片边字横向压到给定宽度内（app 的 fit_edge_text），避免长片名压到格号上。 */
+function fillFittedText(ctx, text, x, y, maxW) {
+  const w = ctx.measureText(text).width;
+  ctx.save();
+  ctx.translate(x, y);
+  if (w > maxW) ctx.scale(maxW / w, 1);
+  ctx.fillText(text, 0, 0);
+  ctx.restore();
+}
+
+/** 过卷箭头：一段横杆 + 三角箭头，tip 指向走片方向（app 的 wind_arrow）。 */
+function drawWindArrow(ctx, tail, tip, cy, halfH, shaftH) {
+  const head = Math.min((tip - tail) * 0.4, halfH * 2.4);
+  ctx.fillRect(tail, cy - shaftH / 2, Math.max(0, tip - tail - head), shaftH);
+  ctx.beginPath();
+  ctx.moveTo(tip, cy);
+  ctx.lineTo(tip - head, cy - halfH);
+  ctx.lineTo(tip - head, cy + halfH);
+  ctx.closePath();
+  ctx.fill();
+}
+
+/** 135 片边字：Kodak 版式与富士反转片点阵版式的位置不同。 */
+function drawFilmEdgeText(ctx, spec) {
+  const scale = spec.scale;
+  const gw = (spec.w - spec.padX * 2) / scale;
+  const X = (mm) => spec.padX + clamp(mm, 0, gw) * scale;
+  const color = edgeInkColor();
+  const number = 13;
+  const bottomMm = spec.h / scale;
+
+  if (filmEdgeLayout() === "fujiSlide") {
+    // 富士反转片（RVP100 / FUJI RDPIII），135：格号在片门左端、上下两条片边各一个
+    // （基线上边 1.80mm、下边 0.27mm）；胶卷名在顶边靠右（基线 1.77mm）；
+    // 半格是「36 ▸ 12A」（基线离片边 0.40mm）；没有 DX 条码。
+    const numSize = (1.55 / 0.714) * scale;
+    const nameSize = (1.04 / 0.714) * scale;
+    drawEdgeNumber(ctx, String(number), X(3.4), 1.8 * scale, numSize, "left", color, false);
+    drawEdgeNumber(ctx, String(number), X(3.4), (bottomMm - 0.27) * scale, numSize, "left", color, false);
+
+    const name = currentEdgeText();
+    ctx.fillStyle = color;
+    ctx.font = `700 ${Math.max(5, Math.round(nameSize))}px Helvetica, Arial, sans-serif`;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+    const nameX = Math.max(X(0.5), Math.min(X(19.4), X(gw - 0.4) - ctx.measureText(name).width));
+    ctx.fillText(name, nameX, 1.77 * scale);
+
+    const aSize = (0.9 / 0.714) * scale;
+    ctx.font = `700 ${Math.max(5, Math.round(aSize))}px Helvetica, Arial, sans-serif`;
+    const foot = bottomMm - 0.4;
+    ctx.fillText("36", X(14.75), foot * scale);
+    drawWindArrow(ctx, X(16.05), X(18.55), (foot - 0.59) * scale, 0.59 * scale, Math.max(1, 0.18 * scale));
+    ctx.fillText(`${number - 1}A`, X(18.88), foot * scale);
+    return;
+  }
+
+  if (isPositiveFilm()) {
+    // 柯达反转片（E100 / Kodachrome）用 Kodak 版式的半格帧：
+    // 顶边是胶卷名（起点 6.4mm，按 app 的槽宽收缩），底边是「12A」和
+    // 3.6mm 长的过卷箭头（中线离片边 0.28mm）；E100 保留 DX 条码。
+    const pSize = (1.22 / 0.714) * scale;
+    ctx.fillStyle = color;
+    ctx.font = `700 ${Math.max(6, Math.round(pSize))}px Helvetica, Arial, sans-serif`;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+    fillFittedText(ctx, currentEdgeText(), X(6.4), 1.53 * scale, X(gw - 0.6) - X(6.4));
+
+    // 半格帧「12A」的 DX 数据也按 12 编码
+    drawDxCode(ctx, spec, 1, number - 1, false);
+    // 第二段 DX 码在 19mm 处，只有画幅够宽（约 3:2 的 135 全幅）才放得下
+    if (gw > 32.5) drawDxCode(ctx, spec, 19, number + 1, true);
+
+    const paSize = (0.9 / 0.714) * scale;
+    ctx.fillStyle = color;
+    ctx.font = `700 ${Math.max(5, Math.round(paSize))}px Helvetica, Arial, sans-serif`;
+    ctx.fillText(`${number - 1}A`, X(15.3), (bottomMm - 0.84) * scale);
+    drawWindArrow(ctx, X(14.47), X(18.07), (bottomMm - 0.28) * scale, 0.26 * scale, Math.max(1, 0.18 * scale));
+    return;
+  }
+
+  // Kodak 版式：上边胶卷名与格号，下边 DX 码、半格号、过卷箭头与格号。
+  const nameSize = (1.22 / 0.714) * scale;
+  ctx.fillStyle = color;
+  ctx.font = `700 ${Math.max(6, Math.round(nameSize))}px Helvetica, Arial, sans-serif`;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  // 给右上角格号留出位置，长片名横向收缩，避免压字
+  const numW = ctx.measureText(String(number)).width * 1.25;
+  fillFittedText(ctx, currentEdgeText(), X(6.4), 1.53 * scale, X(gw - 0.35) - numW - X(6.4) - 0.6 * scale);
+
+  drawEdgeNumber(ctx, String(number), X(gw - 0.35), 1.53 * scale, nameSize, "right", color);
+
+  drawDxCode(ctx, spec, 1, number, false);
+  if (gw > 32.5) drawDxCode(ctx, spec, 19, number + 1, true);
+
+  const aSize = (0.9 / 0.714) * scale;
+  ctx.font = `700 ${Math.max(5, Math.round(aSize))}px Helvetica, Arial, sans-serif`;
+  ctx.fillStyle = color;
+  ctx.textAlign = "left";
+  ctx.fillText(`${number - 1}A`, X(15.3), (bottomMm - 0.84) * scale);
+
+  // 过卷方向箭头：紧贴半格号左侧、与文字同一中线（参考真实底片为实心小箭头）
+  const arrowTip = X(15.15);
+  const arrowTail = X(13.95);
+  const arrowY = (bottomMm - 1.29) * scale;
+  const halfH = Math.max(1.5, 0.24 * scale);
+  if (arrowTip - arrowTail > 0.6 * scale) {
+    ctx.beginPath();
+    ctx.moveTo(arrowTip, arrowY);
+    ctx.lineTo(arrowTail, arrowY - halfH);
+    ctx.lineTo(arrowTail, arrowY + halfH);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  drawEdgeNumber(ctx, String(number), X(gw - 0.3), (bottomMm - 0.14) * scale, (1.4 / 0.714) * scale, "right", color);
+}
+
+function drawFramed(ctx, photo, spec) {
+  if (spec.style === "white") {
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, spec.w, spec.h);
+    ctx.drawImage(photo, spec.padX, spec.padY);
+    return;
+  }
+  if (spec.style === "film") {
+    // 片基：负片是棕褐色，反转片是中性黑片基、白色片边字
+    const positive = isPositiveFilm();
+    const fog = ctx.createLinearGradient(0, 0, 0, spec.h);
+    fog.addColorStop(0, positive ? "#2b2a26" : "#38291d");
+    fog.addColorStop(0.1, positive ? "#111110" : "#181310");
+    fog.addColorStop(0.9, positive ? "#111110" : "#181310");
+    fog.addColorStop(1, positive ? "#2b2a26" : "#38291d");
+    ctx.fillStyle = fog;
+    ctx.fillRect(0, 0, spec.w, spec.h);
+
+    const radius = Math.max(1, Math.round(FRAME_MM.gateRadius * spec.scale));
+    ctx.save();
+    roundRect(ctx, spec.padX, spec.padY, spec.w - spec.padX * 2, spec.h - spec.padY * 2, radius);
+    ctx.clip();
+    ctx.drawImage(photo, spec.padX, spec.padY, spec.w - spec.padX * 2, spec.h - spec.padY * 2);
+    ctx.restore();
+    // 片门边缘的一线反光
+    ctx.strokeStyle = "rgba(255, 238, 210, 0.16)";
+    ctx.lineWidth = Math.max(1, Math.round(spec.scale * 0.12));
+    roundRect(ctx, spec.padX, spec.padY, spec.w - spec.padX * 2, spec.h - spec.padY * 2, radius);
+    ctx.stroke();
+
+    drawFilmEdgeText(ctx, spec);
+    // 齿孔是冲孔，最后绘制以遮挡压到孔位的片边字
+    drawSprockets(ctx, spec);
+    return;
+  }
+  ctx.drawImage(photo, 0, 0);
+}
+
+/** 给已渲染好的画布套上当前边框，导出与预览共用。 */
+function applyFrame(source) {
+  const spec = frameSpec(source.width, source.height, state.frame);
+  if (spec.style === "none") return source;
+  const canvas = document.createElement("canvas");
+  canvas.width = spec.w;
+  canvas.height = spec.h;
+  drawFramed(canvas.getContext("2d"), source, spec);
+  return canvas;
+}
+
+/** 重绘预览；分屏/按住看原图在照片区合成，最后套边框。 */
 function paintView() {
   const frame = state.lastFrame;
   if (!frame) return;
   const { out, src } = frame;
   const w = src.w;
   const h = src.h;
-  const ctx = el.canvas.getContext("2d");
+
+  photoLayer.width = w;
+  photoLayer.height = h;
+  const pctx = photoLayer.getContext("2d");
   if (state.compareHold && state.mode === "single") {
-    ctx.putImageData(new ImageData(src.data, w, h), 0, 0);
-    return;
+    pctx.putImageData(new ImageData(src.data, w, h), 0, 0);
+  } else if (state.split && state.mode === "single") {
+    const sx = clamp(Math.round(w * state.splitRatio), 0, w);
+    pctx.putImageData(new ImageData(src.data, w, h), 0, 0);
+    if (sx < w) {
+      procLayer.width = w;
+      procLayer.height = h;
+      procLayer.getContext("2d").putImageData(new ImageData(out, w, h), 0, 0);
+      pctx.drawImage(procLayer, sx, 0, w - sx, h, sx, 0, w - sx, h);
+    }
+  } else {
+    pctx.putImageData(new ImageData(out, w, h), 0, 0);
   }
-  if (!state.split || state.mode !== "single") {
-    ctx.putImageData(new ImageData(out, w, h), 0, 0);
-    return;
+
+  const spec = frameSpec(w, h, state.frame);
+  if (el.canvas.width !== spec.w || el.canvas.height !== spec.h) {
+    el.canvas.width = spec.w;
+    el.canvas.height = spec.h;
   }
-  const sx = clamp(Math.round(w * state.splitRatio), 0, w);
-  ctx.putImageData(new ImageData(src.data, w, h), 0, 0);
-  if (sx < w) {
-    procLayer.width = w;
-    procLayer.height = h;
-    procLayer.getContext("2d").putImageData(new ImageData(out, w, h), 0, 0);
-    ctx.drawImage(procLayer, sx, 0, w - sx, h, sx, 0, w - sx, h);
-  }
+  const ctx = el.canvas.getContext("2d");
+  ctx.clearRect(0, 0, spec.w, spec.h);
+  drawFramed(ctx, photoLayer, spec);
 }
 
 function syncSplitLine() {
-  const on = state.split && state.mode === "single";
+  const on = state.split && state.mode === "single" && state.lastFrame;
   el.splitLine.hidden = !on;
-  if (on) el.splitLine.style.left = `${(state.splitRatio * 100).toFixed(2)}%`;
+  if (on) {
+    const { src } = state.lastFrame;
+    const spec = frameSpec(src.w, src.h, state.frame);
+    el.splitLine.style.left = `${(((spec.padX + src.w * state.splitRatio) / spec.w) * 100).toFixed(2)}%`;
+  }
   el.splitBtn.classList.toggle("is-active", on);
 }
 
@@ -641,7 +1040,11 @@ function syncLook() {
   el.film.value = state.filmId;
   el.paper.value = state.paperId;
   const film = state.manifest.films.find((f) => f.id === state.filmId);
-  el.filmType.textContent = film && film.type === "positive" ? "反转片" : "负片";
+  const positive = !!film && film.type === "positive";
+  el.filmType.textContent = positive ? "反转片" : "负片";
+  // 反转片直接扫描，没有相纸环节
+  el.paper.disabled = positive;
+  el.paper.title = positive ? "反转片直接扫描，不使用相纸" : "";
   const t = state.transform;
   el.scale.value = String(t.scale);
   el.scaleVal.textContent = `${t.scale.toFixed(2)}×`;
@@ -732,6 +1135,16 @@ el.fileInput.addEventListener("change", () => {
   });
 });
 
+el.frame.addEventListener("change", () => {
+  state.frame = el.frame.value;
+  paintView();
+  syncSplitLine();
+  if (state.lastFrame) {
+    const spec = frameSpec(state.lastFrame.src.w, state.lastFrame.src.h, state.frame);
+    el.exportNote.textContent = `输出 ${spec.w} × ${spec.h}`;
+  }
+});
+
 el.splitBtn.addEventListener("click", () => {
   if (state.mode !== "single" || !hasSource()) return;
   state.split = !state.split;
@@ -754,6 +1167,8 @@ function resetParams() {
   state.transform = { x: 0, y: 0, scale: 1, rot: 0, flip: false };
   state.split = false;
   state.compareHold = false;
+  state.frame = "none";
+  el.frame.value = "none";
   state.batch.forEach((item) => {
     item.autoEv = 0;
     item.autoDirty = true;
@@ -770,8 +1185,11 @@ el.resetAll.addEventListener("click", resetParams);
 let splitDrag = false;
 const setSplitFromEvent = (e) => {
   const rect = el.canvas.getBoundingClientRect();
-  if (!rect.width) return;
-  state.splitRatio = clamp((e.clientX - rect.left) / rect.width, 0.02, 0.98);
+  if (!rect.width || !state.lastFrame) return;
+  const { src } = state.lastFrame;
+  const spec = frameSpec(src.w, src.h, state.frame);
+  const x = ((e.clientX - rect.left) / rect.width) * spec.w;
+  state.splitRatio = clamp((x - spec.padX) / src.w, 0.02, 0.98);
   paintView();
   syncSplitLine();
 };
@@ -1026,7 +1444,7 @@ async function exportCanvas() {
   if (state.mode === "double") {
     // 双重曝光不套胶片与相纸，直接导出叠加结果
     ctx.putImageData(new ImageData(src.data, src.w, src.h), 0, 0);
-    return canvas;
+    return applyFrame(canvas);
   }
   const ev = currentEv(batchItem());
   setStatus("渲染导出…");
@@ -1041,7 +1459,7 @@ async function exportCanvas() {
   const out = applyLut(src.data, src.w, src.h, lut, LUT_SIDE, state.strength);
   ctx.putImageData(new ImageData(out, src.w, src.h), 0, 0);
   setStatus(null);
-  return canvas;
+  return applyFrame(canvas);
 }
 
 el.exportBtn.addEventListener("click", async () => {
@@ -1213,7 +1631,7 @@ async function exportBatch() {
       canvas.height = src.h;
       canvas.getContext("2d").putImageData(new ImageData(out, src.w, src.h), 0, 0);
       const format = resolveExportFormat(el.format.value, item.file);
-      const blob = await encodeCanvas(canvas, format);
+      const blob = await encodeCanvas(applyFrame(canvas), format);
       if (!blob) throw new Error(`${item.name} 编码失败`);
       const name = `${safeBase(item.name)}-film-color.${format.ext}`;
       if (picked.dir) await writeToDir(picked.dir, name, blob);
@@ -1321,6 +1739,19 @@ if (new URLSearchParams(location.search).has("selftest")) {
     batchEvs() {
       return state.batch.map((item) => ({ name: item.name, ev: item.autoEv, dirty: item.autoDirty }));
     },
+    edgeText() {
+      return currentEdgeText();
+    },
+    setFrame(style) {
+      state.frame = style || "none";
+      el.frame.value = state.frame;
+      paintView();
+      syncSplitLine();
+      if (state.lastFrame) {
+        const spec = frameSpec(state.lastFrame.src.w, state.lastFrame.src.h, state.frame);
+        el.exportNote.textContent = `输出 ${spec.w} × ${spec.h}`;
+      }
+    },
     setCompare(on) {
       state.compareHold = !!on;
       paintView();
@@ -1379,10 +1810,10 @@ if (new URLSearchParams(location.search).has("selftest")) {
         balance: state.balance,
         transform: { ...state.transform },
         preview: { ...state.preview },
-        frame: { ...state.frame },
         hasSingle: !!(batchItem() || state.images.single),
         split: state.split,
         compareHold: state.compareHold,
+        frame: state.frame,
         splitRatio: state.splitRatio,
         format: el.format.value,
         hasLower: !!state.images.lower,

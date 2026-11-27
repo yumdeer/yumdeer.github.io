@@ -4,6 +4,8 @@
 // 流程：sRGB 解码 → tcB 转 XYZ → 色度 → 胶片色度表 → 密度曲线 → DIR 耦合
 //       → 相纸 33³ LUT → sRGB。整条链路是逐点函数，因此可以烘焙成 33³ LUT，
 //       对图片做三线性采样，既有参考观感又能实时预览。
+//       反转片（正片）没有橙 mask，也不经过相纸：密度曲线之后直接按
+//       透射率 10^(-d) 输出，见 renderInto 中的 film.positive 分支。
 
 const PRINT_SIDE = 33;
 const PRINT_SCALE = 32;
@@ -217,6 +219,15 @@ function renderInto(r8, g8, b8, film, paper, evGain, out) {
   d0 = curveAt(lr0 - c0, film.coupler, 0);
   d1 = curveAt(lr1 - c1, film.coupler, 1);
   d2 = curveAt(lr2 - c2, film.coupler, 2);
+
+  if (film.positive) {
+    // 反转片（正片）走直接扫描：没有橙 mask，也没有相纸冲印环节。
+    // 密度 d 经 10^(-d) 得到透射率（线性光），再编码回 sRGB。
+    out[0] = encode(Math.pow(10, -d0));
+    out[1] = encode(Math.pow(10, -d1));
+    out[2] = encode(Math.pow(10, -d2));
+    return;
+  }
 
   const ps = paper.side;
   const plight = paper.lut;

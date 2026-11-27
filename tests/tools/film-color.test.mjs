@@ -156,6 +156,28 @@ test("引擎：中性灰保持单调", async () => {
   assert.ok(prev > 120, "白端应明显高于黑端");
 });
 
+test("引擎：反转片直接扫描，不经过相纸", async () => {
+  const film = parseFilm(await readBuf("films/fujifilm_velvia_100.bin"));
+  film.positive = true;
+  const paper = parsePaper(await readBuf("papers/kodak_portra_endura.bin"));
+  // 反转片不传相纸也能烘焙
+  const lut = bakeLut(film, null, 0);
+  const side = 33;
+  let prev = -1;
+  for (let i = 0; i < side; i++) {
+    const idx = ((i * side + i) * side + i) * 3;
+    const v = lut[idx];
+    assert.ok(v >= prev - 1, `反转片灰阶在 ${i} 处回退: ${prev} -> ${v}`);
+    prev = v;
+  }
+  assert.ok(prev > 240, "反转片白端应接近纯白");
+  // 同一款胶卷按负片链路（套相纸）会反相，正片链路必须正向
+  const direct = renderPixel(240, 240, 240, film, null, 0);
+  const negativeLike = renderPixel(240, 240, 240, { ...film, positive: false }, paper, 0);
+  assert.ok(direct[0] > 230, `反转片亮部应接近白色，实际 ${direct.join(",")}`);
+  assert.ok(negativeLike[0] < 80, `负片链路应把亮部压暗，实际 ${negativeLike.join(",")}`);
+});
+
 test("引擎：自动曝光对 18% 灰接近 0 EV", async () => {
   const n = 64;
   const data = new Uint8ClampedArray(n * n * 4);
@@ -212,6 +234,87 @@ test("页面：切换胶卷改变冲印结果", async () => {
     await page.evaluate(() => window.__flSelftest.selectFilm("fujifilm_velvia_100"));
     const velvia = await page.evaluate(() => window.__flSelftest.sample(32, 32));
     assert.notDeepEqual(portra.slice(0, 3), velvia.slice(0, 3));
+  } finally {
+    await page.close();
+  }
+});
+
+test("页面：反转片走正片直接扫描，片边按 135 版式区分柯达/富士", async () => {
+  const { page, errors } = await openTool();
+  try {
+    await neutral(page, "fujifilm_velvia_100", "kodak_portra_endura");
+    const view = await page.evaluate(() => ({
+      filmType: document.querySelector("#film-type").textContent,
+      paperDisabled: document.querySelector("#paper").disabled,
+      sample: window.__flSelftest.sample(32, 32),
+      edge: window.__flSelftest.edgeText(),
+      lutKey: window.__flSelftest.stats().lutKey,
+    }));
+    assert.equal(view.filmType, "反转片");
+    assert.equal(view.paperDisabled, true, "反转片不应再使用相纸");
+    assert.match(view.lutKey, /\|direct\|/);
+    assert.equal(view.edge, "RVP100");
+    // 灰阶正向且偏亮（正片），而不是走负片链路那样被压暗
+    assert.ok(view.sample[0] > 140, `反转片灰阶应偏亮，实际 ${view.sample.join(",")}`);
+
+    // 切回负片后相纸恢复可用
+    await page.evaluate(() => window.__flSelftest.selectFilm("kodak_portra_400"));
+    const back = await page.evaluate(() => ({
+      filmType: document.querySelector("#film-type").textContent,
+      paperDisabled: document.querySelector("#paper").disabled,
+    }));
+    assert.deepEqual(back, { filmType: "负片", paperDisabled: false });
+
+    // 富士反转片 135 点阵版式：橘色片边字、格号在片门左端上下各一个、
+    // 胶卷名在顶边靠右，且没有 DX 条码。
+    await page.evaluate(() => window.__flSelftest.selectFilm("fujifilm_velvia_100"));
+    await page.evaluate(() => window.__flSelftest.setFrame("film"));
+    const velvia = await page.evaluate(() => {
+      const sample = (x, y) => window.__flSelftest.sample(x, y);
+      const orange = (x, y) => {
+        const [r, g, b] = sample(x, y);
+        return r > 200 && g > 150 && b < 160;
+      };
+      let topLeft = 0;
+      let topRight = 0;
+      let dxArea = 0;
+      for (let y = 1; y <= 4; y += 1) {
+        for (let x = 12; x <= 20; x += 1) if (orange(x, y)) topLeft += 1;
+        for (let x = 54; x <= 68; x += 1) if (orange(x, y)) topRight += 1;
+      }
+      for (let x = 8; x <= 12; x += 1) {
+        const [r, , b] = sample(x, 93);
+        if (r > 150 && b < 120) dxArea += 1;
+      }
+      return { topLeft, topRight, dxArea };
+    });
+    assert.ok(velvia.topLeft > 0, "富士反转片格号应在片门左端的片边上");
+    assert.ok(velvia.topRight > 0, "富士反转片胶卷名应在顶边靠右");
+    assert.equal(velvia.dxArea, 0, "富士反转片点阵版式没有 DX 条码");
+
+    // 柯达 E100：Kodak 版式、白色片边字，保留 DX 条码
+    await page.evaluate(() => window.__flSelftest.selectFilm("kodak_ektachrome_100"));
+    await page.evaluate(() => window.__flSelftest.refresh());
+    const e100 = await page.evaluate(() => {
+      const sample = (x, y) => window.__flSelftest.sample(x, y);
+      const light = (x, y) => {
+        const [r, g, b] = sample(x, y);
+        return r > 200 && g > 190 && b > 150;
+      };
+      let topLight = 0;
+      for (let y = 1; y <= 4; y += 1) {
+        for (let x = 20; x <= 40; x += 1) if (light(x, y)) topLight += 1;
+      }
+      let dxLight = 0;
+      for (let y = 91; y <= 95; y += 1) {
+        for (let x = 8; x <= 40; x += 1) if (light(x, y)) dxLight += 1;
+      }
+      return { topLight, dxLight, edge: window.__flSelftest.edgeText() };
+    });
+    assert.equal(e100.edge, "KODAK E100");
+    assert.ok(e100.topLight > 0, "E100 片边字应为白色");
+    assert.ok(e100.dxLight > 0, "E100 使用 Kodak 版式，应保留 DX 条码");
+    assert.deepEqual(errors, []);
   } finally {
     await page.close();
   }
@@ -619,6 +722,72 @@ test("页面：重置恢复默认胶卷、自动曝光与强度", async () => {
     assert.equal(after.strength, 1);
     assert.equal(after.split, false);
     assert.equal(await page.evaluate(() => document.querySelector("#split-line").hidden), true);
+  } finally {
+    await page.close();
+  }
+});
+
+test("页面：导出白边与胶片框", async () => {
+  const { page } = await openTool();
+  try {
+    const url = await solidUrl(page, "#808080");
+    await page.evaluate((u) => window.__flSelftest.loadSingle(u), url);
+    await page.evaluate(() => window.__flSelftest.setAuto(false));
+    const size = () => page.evaluate(() => [
+      document.querySelector("#view-canvas").width,
+      document.querySelector("#view-canvas").height,
+    ]);
+
+    await page.evaluate(() => window.__flSelftest.setFrame("white"));
+    assert.deepEqual(await size(), [76, 76]);
+    assert.deepEqual(await page.evaluate(() => window.__flSelftest.stats().frame), "white");
+    const whiteCorner = await page.evaluate(() => window.__flSelftest.sample(1, 1));
+    assert.deepEqual(whiteCorner.slice(0, 3), [255, 255, 255]);
+    const whiteCenter = await page.evaluate(() => window.__flSelftest.sample(38, 38));
+    assert.notDeepEqual(whiteCenter.slice(0, 3), [255, 255, 255]);
+
+    await page.evaluate(() => window.__flSelftest.setFrame("film"));
+    assert.deepEqual(await size(), [74, 96]);
+    const filmCorner = await page.evaluate(() => window.__flSelftest.sample(1, 1));
+    assert.ok(filmCorner[0] < 80, `片基应为深色，实际 ${filmCorner.join(",")}`);
+    const hole = await page.evaluate(() => window.__flSelftest.sample(4, 7));
+    assert.ok(hole[0] > 200, `齿孔应为浅色，实际 ${hole.join(",")}`);
+    // 回归：底部齿孔下缘曾被黄色 DX 条码压住（穿模）
+    const bottomHole = await page.evaluate(() => window.__flSelftest.sample(6, 88));
+    assert.ok(bottomHole[1] > 200 && bottomHole[2] > 200, `底部齿孔不应被条码覆盖，实际 ${bottomHole.join(",")}`);
+    // 条码比齿孔高，但齿孔最后绘制，孔内一行不应出现条码颜色
+    const dirty = await page.evaluate(() => {
+      let bad = 0;
+      for (let x = 1; x < 73; x += 1) {
+        const [r, , b] = window.__flSelftest.sample(x, 88);
+        if (b < 120 && r > 150) bad += 1;
+      }
+      return bad;
+    });
+    assert.equal(dirty, 0, `底部齿孔内不应出现黄色条码，实际 ${dirty} 个像素`);
+    const dxBar = await page.evaluate(() => window.__flSelftest.sample(9, 93));
+    assert.ok(dxBar[0] > 150 && dxBar[2] < 120, `齿孔下方应有黄色条码，实际 ${dxBar.join(",")}`);
+
+    // 导出也要带边框
+    const dataUrl = await page.evaluate(() => window.__flSelftest.exportDataUrl("image/png"));
+    const buf = Buffer.from(dataUrl.split(",")[1], "base64");
+    assert.equal(buf.readUInt32BE(16), 74);
+    assert.equal(buf.readUInt32BE(20), 96);
+    const note = await page.evaluate(() => document.querySelector("#export-note").textContent);
+    assert.equal(note, "输出 74 × 96");
+
+    // 片边字按 app 中每款胶卷的实测边码
+    assert.equal(await page.evaluate(() => window.__flSelftest.edgeText()), "KODAK PORTRA 400");
+    await page.evaluate(() => window.__flSelftest.selectFilm("kodak_gold_200"));
+    assert.equal(await page.evaluate(() => window.__flSelftest.edgeText()), "KODAK GB 200-7");
+    await page.evaluate(() => window.__flSelftest.selectFilm("ilford_hp5_plus_400"));
+    assert.equal(await page.evaluate(() => window.__flSelftest.edgeText()), "ILFORD HP5 PLUS");
+    await page.evaluate(() => window.__flSelftest.selectFilm("kodak_portra_800"));
+    assert.equal(await page.evaluate(() => window.__flSelftest.edgeText()), "KODAK PORTRA 800-3");
+    await page.evaluate(() => window.__flSelftest.selectFilm("kodak_portra_400"));
+
+    await page.evaluate(() => window.__flSelftest.setFrame("none"));
+    assert.deepEqual(await size(), [64, 64]);
   } finally {
     await page.close();
   }
